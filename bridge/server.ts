@@ -46,10 +46,12 @@ import { isBlobHash, resolveBlobPath } from "./journal/pi.ts";
 import { statFile } from "./journal/files.ts";
 import {
   bearerToken,
-  normalizeLabel,
-  toDeviceWire,
   type ClaimFailure,
+  hashesEqual,
+  normalizeLabel,
   type PairingStore,
+  sha256Hex,
+  toDeviceWire,
 } from "./pairing.ts";
 import { modeForWire } from "./crew/mode.ts";
 import type { CrewRuntime } from "./crew/config.ts";
@@ -1427,7 +1429,7 @@ export function startServer(opts: {
 
       // ── Live state (polled by the client) ────────────────────────────────
       if (pathname === "/api/snapshot") {
-        const gate = checkAccess(req, cfg);
+        const gate = checkAccess(req, cfg, "read", { pairing });
         if (!gate.ok) return text(gate.reason, 403);
         const device = whois(req);
         // A BROWSER poll is a phone looking; the lead's own sweep of a peer is not, which is why
@@ -1985,6 +1987,41 @@ export function startServer(opts: {
       }
 
       // ── Device pairing (bridge/pairing.ts) ───────────────────────────────
+      // The cloud-auth bootstrap: whoever holds COLLIE_AUTH_TOKEN may enrol a device outright, no
+      // code. It is how a landing page that just created this box hands the phone a credential of
+      // its own — the root secret rides in a URL fragment once, the phone trades it for a device
+      // token here, and the device is then revocable on its own like any other. 404 when cloud auth
+      // is off: without a root token there is nothing this door could check.
+      if (pathname === "/api/pair/token" && req.method === "POST") {
+        if (!pairing) return text("pairing unavailable", 503);
+        if (cfg.authToken === "") return text("not found", 404);
+        const gate = checkAccess(req, cfg, "write", { pairing, bootstrap: true });
+        if (!gate.ok) return text(gate.reason, 403);
+        if (!holdsRootToken(req, cfg)) return text("credential required", 403);
+        let body: JsonValue;
+        try {
+          // SAFETY: `Request.json()` output IS a JsonValue by construction; `normalizeLabel`
+          // re-checks the one field of it that is used.
+          body = (await req.json()) as JsonValue;
+        } catch {
+          return jsonError(apiError("pairing.bad_request"), 400, req.headers.get("accept-encoding"));
+        }
+        const label = normalizeLabel(asJsonRecord(body)?.label);
+        if (label === null) {
+          return jsonError(apiError("pairing.bad_request"), 400, req.headers.get("accept-encoding"));
+        }
+        const enrolled = await pairing.enroll(label);
+        if (!enrolled.ok) {
+          return jsonError(
+            apiError(PAIRING_ERROR_CODES[enrolled.reason]),
+            400,
+            req.headers.get("accept-encoding"),
+          );
+        }
+        audit.record({ action: "pair", device: label, detail: { label, via: "token" } });
+        // The ONLY time this token exists outside the requesting device. Nothing stores it here.
+        return json({ token: enrolled.token, label }, req.headers.get("accept-encoding"));
+      }
       if (pathname === "/api/pair" && req.method === "POST") {
         if (!pairing) return text("pairing unavailable", 503);
         // THE BOOTSTRAP, and the one write-shaped route that is deliberately not write-gated: a
@@ -1995,7 +2032,7 @@ export function startServer(opts: {
         // five-attempt counter. The header device gate is skipped for the same reason and with the
         // same reasoning: it answers "is this device allowlisted", which is the question pairing
         // exists to stop asking.
-        const gate = checkAccess(req, cfg, "write");
+        const gate = checkAccess(req, cfg, "write", { pairing, bootstrap: true });
         if (!gate.ok) return text(gate.reason, 403);
         let body: JsonValue;
         try {
@@ -2128,6 +2165,16 @@ export function startServer(opts: {
  */
 export function startupWarnings(cfg: Config): string[] {
   const warnings: string[] = [];
+  if (cfg.authToken !== "") {
+    warnings.push(
+      `[bridge] cloud auth: COLLIE_AUTH_TOKEN is set — every /api route requires the token or a paired device's token as a bearer; static assets and /api/health stay open (docs/deployment.md → Variant F).`,
+    );
+    if (cfg.authToken.length < 24) {
+      warnings.push(
+        `[bridge] WARNING: COLLIE_AUTH_TOKEN is only ${cfg.authToken.length} characters. It is a root credential on a public URL — use at least 24 random characters.`,
+      );
+    }
+  }
   if (!isLoopbackBindHost(cfg.host)) {
     warnings.push(
       `[bridge] WARNING: bound to ${cfg.host} via COLLIE_ALLOW_NON_LOOPBACK_BIND — the identity, device and same-origin gates are all client-settable on a wide bind, and the peer-address check is off. Whatever fronts this port is now the only control.`,
@@ -3636,6 +3683,7 @@ export function checkAccess(
   req: Request,
   cfg: Config,
   level: "read" | "write" = "read",
+  opts: AccessOptions = {},
 ): { ok: true } | { ok: false; reason: string } {
   const host = req.headers.get("host") ?? "";
 
@@ -3643,6 +3691,16 @@ export function checkAccess(
   // (Host==Origin==evil) never reaches it. COLLIE_ALLOW_ANY_HOST=1 is the operator's explicit opt-out.
   if (!cfg.allowAnyHost && !isHostAllowed(host, cfg)) {
     return { ok: false, reason: "host not allowed" };
+  }
+
+  // Cloud auth (COLLIE_AUTH_TOKEN): with no proxy of the operator's in front, the bearer IS the
+  // front door, for reads as much as writes. The refusal body is the pairing gate's own, on
+  // purpose: the phone already knows that sentence means "go pair" (web/src/lib/pairing.ts), and
+  // pairing is exactly the remedy. `bootstrap` is the two pairing doors' exemption — they are how
+  // a device without a credential gets one.
+  const credentialed = holdsCredential(req, cfg, opts.pairing);
+  if (cfg.authToken !== "" && !credentialed && !opts.bootstrap) {
+    return { ok: false, reason: NOT_PAIRED_BODY };
   }
 
   const origin = req.headers.get("origin");
@@ -3658,7 +3716,10 @@ export function checkAccess(
       LOOPBACK_HOST.test(originHost) ||
       cfg.allowedOrigins.includes(origin);
     if (!allowed) return { ok: false, reason: "cross-origin rejected" };
-  } else if (level === "write" && !LOOPBACK_HOST.test(host)) {
+  } else if (level === "write" && !LOOPBACK_HOST.test(host) && !credentialed) {
+    // Unless it carries a bearer credential: a cross-site page cannot attach an Authorization header
+    // without a CORS preflight this bridge never grants, so a credentialed Origin-less write is a
+    // non-browser client that holds the secret — the case cloud auth exists to admit.
     // A write with no Origin header from a non-loopback Host isn't a real browser request — refuse.
     return { ok: false, reason: "origin required" };
   }
@@ -3674,6 +3735,42 @@ export function checkAccess(
     }
   }
   return { ok: true };
+}
+
+/** The pairing gate's refusal — and, under cloud auth, the refusal for any uncredentialed request. */
+export const NOT_PAIRED_BODY = "device not paired";
+
+/** What {@link checkAccess} may be told beyond the request itself. */
+export interface AccessOptions {
+  /** The pairing registry, so a paired device's token counts as a credential under cloud auth. */
+  pairing?: PairingGate;
+  /**
+   * This is one of the two pairing doors (`/api/pair`, `/api/pair/token`): under cloud auth, do not
+   * refuse an uncredentialed caller here — the route itself checks the code or the root token.
+   */
+  bootstrap?: boolean;
+}
+
+/**
+ * Whether the request's bearer is the operator's `COLLIE_AUTH_TOKEN`. Compared as two SHA-256
+ * digests, like paired tokens are, so the comparison time says nothing about the secret's bytes.
+ * Always false when cloud auth is off — an empty configured token matches nothing.
+ */
+export function holdsRootToken(req: Request, cfg: Config): boolean {
+  if (cfg.authToken === "") return false;
+  const bearer = bearerToken(req.headers);
+  if (bearer === null || bearer === "") return false;
+  return hashesEqual(sha256Hex(bearer), sha256Hex(cfg.authToken));
+}
+
+/**
+ * Whether the request carries ANY credential cloud auth accepts: the root token, or a paired
+ * device's token. Meaningful only when `cfg.authToken` is set; otherwise nothing asks.
+ */
+export function holdsCredential(req: Request, cfg: Config, pairing?: PairingGate): boolean {
+  if (cfg.authToken === "") return false;
+  if (holdsRootToken(req, cfg)) return true;
+  return pairing !== undefined && pairing.resolve(bearerToken(req.headers)) !== null;
 }
 
 /**
@@ -3711,15 +3808,22 @@ export function guard(
   level: "read" | "write",
   pairing?: PairingGate,
 ): Response | null {
-  const gate = checkAccess(req, cfg, level);
+  const gate = checkAccess(req, cfg, level, { pairing });
   if (!gate.ok) return text(gate.reason, 403);
   if (level !== "write") return null;
   if (!deviceAuth(req, cfg).authorized) return text("device not authorised", 403);
   // The second, independent write factor. Distinct refusal text on purpose: "not authorised" is the
   // operator's proxy allowlist, "not paired" is this device's own missing credential, and the two
   // are fixed in completely different places.
-  if (pairing !== undefined && pairing.enforced() && pairing.resolve(bearerToken(req.headers)) === null) {
-    return text("device not paired", 403);
+  // The operator's own root token (cloud auth) stands in for a paired device: it is the
+  // credential that mints them.
+  if (
+    pairing !== undefined &&
+    pairing.enforced() &&
+    pairing.resolve(bearerToken(req.headers)) === null &&
+    !holdsRootToken(req, cfg)
+  ) {
+    return text(NOT_PAIRED_BODY, 403);
   }
   return null;
 }

@@ -644,6 +644,7 @@ describe("solo zero-tax — routes", () => {
       // browser answering its own operator. A solo instance registers it and 404s
       // (`crew.not_lead`) — the same shape `/api/stt` has when no provider is configured.
       "/api/pair",
+      "/api/pair/token",
       // "Look now" (ADR 0031) — a SOLO route that legitimately extends this list, named here rather
       // than exempted. It is session-scoped and read-gated, and it registers no crew route of its
       // own: a lead reaches a peer's through the peer's existing `/crew/v1/*` dispatch.
@@ -719,6 +720,7 @@ const CONFIG_KEYS = {
   submitKeys: true,
   trustedUser: true,
   trustedUserOptional: true,
+  authToken: true,
   deviceHeader: true,
   deviceAllowlist: true,
   allowedOrigins: true,
@@ -745,6 +747,7 @@ describe("solo zero-tax — config", () => {
       "allowNonLoopbackBind",
       "allowedOrigins",
       "auditContent",
+      "authToken",
       "basePath",
       "cacheRulesFile",
       "cacheWarnSeconds",
@@ -822,6 +825,7 @@ describe("solo zero-tax — config", () => {
       "COLLIE_ALLOW_ANY_HOST",
       "COLLIE_ALLOW_NON_LOOPBACK_BIND",
       "COLLIE_AUDIT_CONTENT",
+      "COLLIE_AUTH_TOKEN",
       "COLLIE_BASE_PATH",
       "COLLIE_CACHE_WARN_SECONDS",
       "COLLIE_CODEX_ROOT",

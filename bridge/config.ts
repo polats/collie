@@ -298,6 +298,17 @@ export interface Config {
    */
   trustedUserOptional: boolean;
   /**
+   * Cloud auth (`COLLIE_AUTH_TOKEN`): a static bearer secret for a bridge whose public URL has no
+   * proxy of the operator's in front of it — a PaaS container, say. When set, EVERY `/api/*` route,
+   * reads included, requires either this token or a paired device's token as `Authorization:
+   * Bearer`; only static assets and `/api/health` stay open. A request carrying a valid credential
+   * is also excused the "Origin required for writes" rule, since a bearer header can only come from
+   * a client that holds the secret, not from a cross-site form. The token is the root credential:
+   * it may mint device tokens (`POST /api/pair/token`) and it writes even when nothing is paired.
+   * Empty = off, and every gate behaves exactly as before (docs/deployment.md → Variant F).
+   */
+  authToken: string;
+  /**
    * How much of each value's content the audit trail keeps — see {@link AuditContent} in audit.ts
    * for what `none` does and does not redact.
    */
@@ -636,6 +647,7 @@ export function loadConfig(env: Environment = process.env): Config {
     cacheRulesFile: join(configDir, "cache-rules.toml"),
     trustedUser: env.COLLIE_TRUSTED_USER ?? "",
     trustedUserOptional: envBool("COLLIE_TRUSTED_USER_OPTIONAL", false, env),
+    authToken: (env.COLLIE_AUTH_TOKEN ?? "").trim(),
     auditContent: envEnum("COLLIE_AUDIT_CONTENT", ["preview", "none"] as const, "preview", env),
     deviceHeader: (env.COLLIE_DEVICE_HEADER ?? "").trim(),
     deviceAllowlist: envList("COLLIE_DEVICE_ALLOWLIST", env),

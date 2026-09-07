@@ -479,6 +479,22 @@ export class PairingStore {
       else await this.io.writePending(verdict.pending);
       return { ok: false, reason: verdict.reason };
     }
+    const enrolled = await this.enroll(label);
+    // A duplicate label leaves the pending pairing alive: the operator retries with another name
+    // rather than re-running `collie pair`.
+    if (!enrolled.ok) return enrolled;
+    await this.io.deletePending();
+    return enrolled;
+  }
+
+  /**
+   * Enrol a device WITHOUT a code: mint a token, store its hash under `label`. This is the half of
+   * {@link claim} that runs once the code has been checked, exposed on its own for the cloud-auth
+   * bootstrap (`POST /api/pair/token` in server.ts), where the caller has already proved it holds the
+   * operator's `COLLIE_AUTH_TOKEN` — a stronger credential than a ten-minute code. The token exists
+   * exactly once, in the return value; only its hash is written.
+   */
+  async enroll(label: string): Promise<{ ok: true; token: string } | { ok: false; reason: "duplicate-label" }> {
     const token = generateToken(this.random);
     const enrolled = await this.serialize(async () => {
       const next = addDevice(coerceRegistry(await this.io.readRegistry()), {
@@ -490,10 +506,7 @@ export class PairingStore {
       await this.io.writeRegistry(next);
       return true;
     });
-    // A duplicate label leaves the pending pairing alive: the operator retries with another name
-    // rather than re-running `collie pair`.
     if (!enrolled) return { ok: false, reason: "duplicate-label" };
-    await this.io.deletePending();
     return { ok: true, token };
   }
 

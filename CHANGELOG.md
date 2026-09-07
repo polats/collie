@@ -30,6 +30,12 @@ PATH. Details and rollback: [`docs/upgrading.md`](./docs/upgrading.md) → *Upgr
 
 ## [Unreleased]
 
+### Added
+- Cloud auth: `COLLIE_AUTH_TOKEN` turns a bearer secret into the front door for a bridge on a
+  public PaaS URL with no proxy in front — every `/api` route, reads included, requires the token
+  or a paired device's token; a credentialed write needs no `Origin`; `POST /api/pair/token` lets
+  the token holder enrol a device without a code. Off when unset (docs/deployment.md → Variant F).
+
 ### Changed
 - **An update puts the phone in update mode until it is done.** Tap "Update all machines to X" on the Updates page, and the first screen of update mode names every machine and this phone, with Start update as the confirm; the card no longer grows a confirm inside itself. While the update runs, your app stays in view behind a veil and takes no tap. A band at the top says "Update mode · step N of 7" with a clock and a progress bar, and a panel at the bottom walks the seven steps: Check, Build, Restart, Verify, Other machines, This phone, Done. Each machine has a row with its versions, and only the row that is working moves. A member that stops answering, or waits out its hourly limit, gets "Skip <name>" and "Keep trying". The update ends on a Done, Rolled back or Stuck screen with "Back to the app", never on a toast alone. Another phone or tablet keeps its app and shows one line, "Update running, started on another device", with View. Nothing in the panel moves from one step to the next (ADR 0064).
 

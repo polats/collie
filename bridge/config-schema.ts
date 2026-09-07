@@ -378,6 +378,15 @@ export const CONFIG_SETTINGS: readonly ConfigSetting[] = [
     configField: "trustedUserOptional",
   },
   {
+    key: "auth_token",
+    env: "COLLIE_AUTH_TOKEN",
+    section: "access",
+    kind: "secret",
+    default: "",
+    doc: "A bearer secret every /api route requires, for a bridge on a public PaaS URL with no proxy in front. A file holding it must be mode 600.",
+    configField: "authToken",
+  },
+  {
     key: "device_header",
     env: "COLLIE_DEVICE_HEADER",
     section: "access",
