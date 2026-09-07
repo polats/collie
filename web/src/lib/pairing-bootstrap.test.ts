@@ -36,7 +36,8 @@ describe("bootstrapPairingFromFragment", () => {
       win: {
         location: { hash, pathname: "/", search: "" },
         history: {
-          replaceState: (_s: unknown, _t: string, url?: string | URL | null) => {
+          // The stub records only the URL argument; History's `data` and `unused` are irrelevant here.
+          replaceState: (_data: null, _unused: string, url?: string | URL | null) => {
             calls.push(String(url));
           },
         },
