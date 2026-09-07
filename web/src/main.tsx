@@ -30,10 +30,11 @@ if (!root) throw new Error("missing #root");
 // for this device's own token BEFORE the first render, so the first /api/snapshot already carries
 // a credential and the root secret is out of the address bar before anything could copy it
 // (lib/pairing-bootstrap.ts). Every other load has no fragment and this resolves immediately.
-void bootstrapPairingFromFragment().then(() => {
+void (async () => {
+  await bootstrapPairingFromFragment();
   createRoot(root).render(
     <StrictMode>
       <App />
     </StrictMode>,
   );
-});
+})();

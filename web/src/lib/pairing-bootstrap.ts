@@ -10,6 +10,7 @@
 //
 // Nothing here runs when there is no fragment, which is every load but the first.
 
+import { asJsonString, parseJsonObject } from "./json";
 import { TOKEN_STORAGE_KEY, getDeviceToken, setDeviceToken } from "./pairing";
 
 /** The fragment parameter carrying the root secret. */
@@ -85,9 +86,10 @@ async function enrollWithRootToken(rootToken: string, label: string): Promise<{ 
     body: JSON.stringify({ label }),
   });
   if (!res.ok) throw new Error(`/api/pair/token → ${res.status}`);
-  const body = (await res.json()) as { token?: unknown };
-  if (typeof body.token !== "string" || body.token === "") throw new Error("no token in reply");
-  return { token: body.token };
+  // Parsed at the I/O boundary with the JSON helpers, like every other bridge reply (lib/json.ts).
+  const token = asJsonString(parseJsonObject(await res.text())?.token);
+  if (token === undefined || token === "") throw new Error("no token in reply");
+  return { token };
 }
 
 // Re-exported so a caller can assert the storage key without importing pairing.ts as well.
