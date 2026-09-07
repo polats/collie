@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { initDesign } from "./lib/design";
 import { initOperatorFonts } from "./lib/operator-config";
+import { bootstrapPairingFromFragment } from "./lib/pairing-bootstrap";
 import "./index.css";
 // Registers the service worker (precaches the app shell, enables install) and wires auto/manual
 // updates. Guards on `serviceWorker in navigator`, so over plain HTTP (insecure context) it no-ops.
@@ -25,8 +26,14 @@ initOperatorFonts();
 const root = document.getElementById("root");
 if (!root) throw new Error("missing #root");
 
-createRoot(root).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-);
+// Cloud-auth hand-off: a `#token=` fragment left by the page that created this bridge is traded
+// for this device's own token BEFORE the first render, so the first /api/snapshot already carries
+// a credential and the root secret is out of the address bar before anything could copy it
+// (lib/pairing-bootstrap.ts). Every other load has no fragment and this resolves immediately.
+void bootstrapPairingFromFragment().then(() => {
+  createRoot(root).render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  );
+});

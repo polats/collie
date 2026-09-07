@@ -255,6 +255,46 @@ Rules:
 
 ---
 
+## Variant F — public PaaS URL with a bearer secret (no proxy of yours at all)
+
+Use this when the bridge runs in a container whose public URL is handed to you by the platform —
+a Hugging Face Space, a Railway service, a Codespace — and there is nothing of yours in front of
+it to inject an identity. Every other variant assumes a trusted proxy; this one replaces the proxy
+with a secret the platform injects as an environment variable at creation time.
+
+```bash
+COLLIE_SKIP_SERVE=1
+COLLIE_HOST=0.0.0.0                       # the platform routes to the container port directly…
+COLLIE_ALLOW_NON_LOOPBACK_BIND=1          # …so the bind is wide, and the token is the only control
+COLLIE_PUBLIC_HOSTS=my-box.hf.space       # REQUIRED — Host validation fails closed
+COLLIE_ALLOWED_ORIGINS=https://my-box.hf.space
+COLLIE_PUBLIC_URL=https://my-box.hf.space
+COLLIE_AUTH_TOKEN=<24+ random characters>  # the root credential; treat it like a root password
+```
+
+What `COLLIE_AUTH_TOKEN` changes:
+
+- **Every `/api/*` route needs a credential, reads included.** A request must carry
+  `Authorization: Bearer <COLLIE_AUTH_TOKEN>` or a paired device's token. Without one it is refused
+  with `403 device not paired` — the same sentence the pairing gate uses, so the phone's UI already
+  knows to offer pairing. Static assets and `/api/health` stay open: the app shell is public code,
+  and a platform's readiness probe needs an answer.
+- **A credentialed write needs no `Origin`.** A bearer header cannot be attached by a cross-site
+  form without a CORS preflight the bridge never grants, so an Origin-less request that holds the
+  secret is a non-browser client. Cross-origin requests are still refused.
+- **The root token writes even when nothing is paired**, and it may mint device tokens:
+  `POST /api/pair/token` with `Authorization: Bearer <COLLIE_AUTH_TOKEN>` and `{"label": "phone"}`
+  returns a device token exactly once. That is the bootstrap a provisioning page uses: it passes
+  the root secret to the phone once, in a URL fragment, and the phone trades it for a device token
+  of its own, which is then revocable like any other under Settings.
+- **`collie pair` still works.** The code door stays reachable without a credential, because a code
+  is a credential.
+
+`COLLIE_TRUSTED_USER` and `COLLIE_DEVICE_HEADER` have no effect here — no proxy injects them.
+The token is a root login to a shell on the container: generate it with something like
+`openssl rand -base64 32`, store it only in the platform's secret store, and rotate it by
+redeploying.
+
 ## Several Collies on one host
 
 To host independent instances per user on a shared system ([ADR 0001](../.adr/0001-one-managed-front-door.md)):

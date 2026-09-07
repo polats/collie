@@ -7,38 +7,40 @@ import {
   BLOB_MAX_BYTES,
   sniffBlobType,
   bridgeConfigBody,
-  muxConfigBody,
-  muxLogoResponse,
   BUILD_HEADER,
   cacheControlFor,
   checkAccess,
-  launch,
-  marksPaneSeen,
-  SEEN_HEADER,
   deviceAuth,
   guard,
+  healthBody,
   historyParams,
+  holdsRootToken,
   isHostAllowed,
   isLoopbackPeer,
   isReservedAuthPath,
   keysPane,
+  launch,
   launchersRoute,
+  marksPaneSeen,
+  muxConfigBody,
+  muxLogoResponse,
   normalizeTabLabel,
+  NOT_PAIRED_BODY,
   paneReadResponse,
   parsePairRequest,
   parseSnoozeRequest,
   replyPane,
+  type ReplySender,
   requestBodyCap,
   requestDevice,
   resetStaticGzipCache,
   resolveStaticPath,
+  SEEN_HEADER,
   sendReplySteps,
   serveStatic,
   staticGzipStats,
   startupWarnings,
-  healthBody,
   withBuildHeader,
-  type ReplySender,
 } from "./server.ts";
 import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, truncate, writeFile } from "node:fs/promises";
@@ -142,6 +144,7 @@ function cfg(overrides: Partial<Config> = {}): Config {
     launchersFile: "/nope/launchers.toml",
     trustedUser: "",
     trustedUserOptional: false,
+    authToken: "",
     auditContent: "preview",
     deviceHeader: "",
     deviceAllowlist: [],
@@ -2895,5 +2898,86 @@ describe("update status peers — the legs of a crew-wide run", () => {
     // A peers-only run starts no updater on this machine.
     const peersBranch = handler.slice(handler.indexOf('if (verdict.kind === "peers")'));
     expect(peersBranch.slice(0, peersBranch.indexOf("return json"))).not.toContain("action.start");
+  });
+});
+
+// ── Cloud auth: COLLIE_AUTH_TOKEN (docs/deployment.md → Variant F) ─────────────────────────────
+// On a public PaaS URL there is no proxy of the operator's in front of the bridge, so a bearer
+// credential has to be the front door — for reads as much as writes. What is pinned here is the
+// wiring: that an empty token changes nothing, that reads are refused without a credential and
+// with the pairing gate's own words, that both the root token and a paired device's token count,
+// that a credentialed Origin-less write is admitted, and that the root token writes even when a
+// paired registry would otherwise refuse it.
+describe("cloud auth — COLLIE_AUTH_TOKEN gates every /api route", () => {
+  const ROOT = "root-secret-0123456789abcdefghij";
+  const cloud = (over: Partial<Config> = {}) => cfg({ authToken: ROOT, allowAnyHost: false, publicHosts: ["box.example.com"], ...over });
+  const gateOf = (tokens: Record<string, string>) => ({
+    enforced: () => Object.keys(tokens).length > 0,
+    resolve: (token: string | null) =>
+      token !== null && tokens[token] !== undefined ? { label: tokens[token]! } : null,
+  });
+  const paired = gateOf({ "tok-phone": "phone" });
+  const nobody = gateOf({});
+  const bearer = (t: string) => ({ authorization: `Bearer ${t}` });
+
+  test("an empty token is the feature off — the plain same-origin read still passes", () => {
+    expect(guard(req({ host: "box.example.com" }), cfg({ publicHosts: ["box.example.com"], allowAnyHost: false }), "read", nobody)).toBeNull();
+    expect(holdsRootToken(req({ host: "box.example.com", ...bearer("") }), cfg())).toBe(false);
+  });
+
+  test("a read with no credential is refused, in the pairing gate's words", async () => {
+    const denied = guard(req({ host: "box.example.com" }), cloud(), "read", nobody);
+    expect(denied).not.toBeNull();
+    expect(denied!.status).toBe(403);
+    expect(await denied!.text()).toBe(NOT_PAIRED_BODY);
+  });
+
+  test("the root token reads; a paired device's token reads; a wrong token does not", () => {
+    expect(guard(req({ host: "box.example.com", ...bearer(ROOT) }), cloud(), "read", nobody)).toBeNull();
+    expect(guard(req({ host: "box.example.com", ...bearer("tok-phone") }), cloud(), "read", paired)).toBeNull();
+    expect(guard(req({ host: "box.example.com", ...bearer("nope") }), cloud(), "read", paired)!.status).toBe(403);
+    expect(guard(req({ host: "box.example.com", ...bearer(ROOT.slice(0, -1)) }), cloud(), "read", nobody)!.status).toBe(403);
+  });
+
+  test("the host allowlist still runs first — a rebound Host is refused even with the root token", async () => {
+    const denied = guard(req({ host: "evil.example.net", ...bearer(ROOT) }), cloud(), "read", nobody);
+    expect(await denied!.text()).toBe("host not allowed");
+  });
+
+  test("a credentialed write needs no Origin; an uncredentialed one is refused before Origin is asked", async () => {
+    expect(guard(req({ host: "box.example.com", ...bearer(ROOT) }), cloud(), "write", nobody)).toBeNull();
+    expect(guard(req({ host: "box.example.com", ...bearer("tok-phone") }), cloud(), "write", paired)).toBeNull();
+    const denied = guard(req({ host: "box.example.com" }), cloud(), "write", paired);
+    expect(await denied!.text()).toBe(NOT_PAIRED_BODY);
+    // Without cloud auth, the same Origin-less remote write is still refused for want of an Origin.
+    const plain = checkAccess(req({ host: "box.example.com", ...bearer("tok-phone") }), cfg({ publicHosts: ["box.example.com"], allowAnyHost: false }), "write");
+    expect(plain).toEqual({ ok: false, reason: "origin required" });
+  });
+
+  test("a cross-origin write is still refused, credential or not", async () => {
+    const denied = guard(
+      req({ host: "box.example.com", origin: "https://attacker.example.net", ...bearer(ROOT) }),
+      cloud(),
+      "write",
+      nobody,
+    );
+    expect(await denied!.text()).toBe("cross-origin rejected");
+  });
+
+  test("the root token writes even when a paired registry would refuse an unknown bearer", () => {
+    expect(guard(req({ host: "box.example.com", origin: "https://box.example.com", ...bearer(ROOT) }), cloud(), "write", paired)).toBeNull();
+  });
+
+  test("the pairing doors stay reachable without a credential (bootstrap), but only they do", () => {
+    const r = req({ host: "box.example.com", origin: "https://box.example.com" });
+    expect(checkAccess(r, cloud(), "write", { pairing: nobody, bootstrap: true })).toEqual({ ok: true });
+    expect(checkAccess(r, cloud(), "write", { pairing: nobody })).toEqual({ ok: false, reason: NOT_PAIRED_BODY });
+  });
+
+  test("startup says so, and complains about a short token", () => {
+    const notes = startupWarnings(cloud());
+    expect(notes.some((w) => w.includes("cloud auth"))).toBe(true);
+    expect(notes.some((w) => w.includes("only"))).toBe(false);
+    expect(startupWarnings(cloud({ authToken: "short" })).some((w) => w.includes("only 5 characters"))).toBe(true);
   });
 });

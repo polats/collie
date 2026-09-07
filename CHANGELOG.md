@@ -30,6 +30,11 @@ PATH. Details and rollback: [`docs/upgrading.md`](./docs/upgrading.md) → *Upgr
 
 ## [Unreleased]
 
+- Cloud auth: `COLLIE_AUTH_TOKEN` turns a bearer secret into the front door for a bridge on a
+  public PaaS URL with no proxy in front — every `/api` route, reads included, requires the token
+  or a paired device's token; a credentialed write needs no `Origin`; `POST /api/pair/token` lets
+  the token holder enrol a device without a code. Off when unset (docs/deployment.md → Variant F).
+
 ## [1.8.2] - 2026-09-12
 
 ### Fixed

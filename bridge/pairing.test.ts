@@ -689,3 +689,29 @@ describe("concurrent lastSeenAt stamps (#159)", () => {
     }
   });
 });
+
+describe("PairingStore.enroll — a device without a code (cloud-auth bootstrap)", () => {
+  test("mints a token, stores only its hash, and touches no pending pairing", async () => {
+    const { io, state } = memoryIo({ pending: newPending("ABCD2345", 0) });
+    const store = new PairingStore(io, () => 1000);
+    const enrolled = await store.enroll("phone");
+    if (!enrolled.ok) throw new Error(`expected success, got ${enrolled.reason}`);
+    expect(JSON.stringify(state.registry)).not.toContain(enrolled.token);
+    expect(coerceRegistry(state.registry).devices[0]).toEqual({
+      label: "phone",
+      tokenHash: sha256Hex(enrolled.token),
+      createdAt: 1000,
+      lastSeenAt: 1000,
+    });
+    expect(store.resolve(enrolled.token)?.label).toBe("phone");
+    // The pending code is untouched: enroll is not a claim.
+    expect(state.pending).not.toBeNull();
+  });
+
+  test("refuses a duplicate label", async () => {
+    const { io } = memoryIo();
+    const store = new PairingStore(io, () => 1000);
+    expect((await store.enroll("phone")).ok).toBe(true);
+    expect(await store.enroll("phone")).toEqual({ ok: false, reason: "duplicate-label" });
+  });
+});
