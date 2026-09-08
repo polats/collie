@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { initDesign } from "./lib/design";
 import { initOperatorFonts } from "./lib/operator-config";
-import { bootstrapPairingFromFragment } from "./lib/pairing-bootstrap";
+import { bootstrapCheckoutFromFragment, bootstrapPairingFromFragment } from "./lib/pairing-bootstrap";
 import "./index.css";
 // Registers the service worker (precaches the app shell, enables install) and wires auto/manual
 // updates. Guards on `serviceWorker in navigator`, so over plain HTTP (insecure context) it no-ops.
@@ -32,6 +32,13 @@ if (!root) throw new Error("missing #root");
 // (lib/pairing-bootstrap.ts). Every other load has no fragment and this resolves immediately.
 void (async () => {
   await bootstrapPairingFromFragment();
+  // A box created "from a repository" arrives with #repo=: have the bridge clone it and open on
+  // that pane, so the first thing the phone shows is the checkout running.
+  const paneId = await bootstrapCheckoutFromFragment();
+  if (paneId !== null && !location.pathname.startsWith("/pane/")) {
+    location.replace(`/pane/${encodeURIComponent(paneId)}`);
+    return;
+  }
   createRoot(root).render(
     <StrictMode>
       <App />
