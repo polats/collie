@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { bootstrapPairingFromFragment, defaultDeviceLabel, tokenFromFragment } from "./pairing-bootstrap";
+import { bootstrapCheckoutFromFragment, bootstrapPairingFromFragment, defaultDeviceLabel, repoFromFragment, tokenFromFragment } from "./pairing-bootstrap";
 import { TOKEN_STORAGE_KEY } from "./pairing";
 
 describe("tokenFromFragment", () => {
@@ -76,6 +76,48 @@ describe("bootstrapPairingFromFragment", () => {
     const w = win("#token=root-secret");
     expect(await bootstrapPairingFromFragment(w.win, async () => { throw new Error("403"); })).toBe("failed");
     expect(localStorage.getItem(TOKEN_STORAGE_KEY)).toBeNull();
+    expect(w.calls).toEqual(["/"]);
+  });
+  it("keeps the rest of the fragment for the checkout step and drops only the secret", async () => {
+    localStorage.removeItem(TOKEN_STORAGE_KEY);
+    const w = win("#token=root&repo=polats/freeagent");
+    expect(await bootstrapPairingFromFragment(w.win, async () => ({ token: "dev" }))).toBe("paired");
+    expect(w.calls).toEqual(["/#repo=polats%2Ffreeagent"]);
+  });
+});
+
+describe("repoFromFragment", () => {
+  it("accepts owner/name and nothing else", () => {
+    expect(repoFromFragment("#repo=polats/freeagent")).toBe("polats/freeagent");
+    expect(repoFromFragment("#token=x&repo=a/b.c")).toBe("a/b.c");
+    expect(repoFromFragment("#repo=freeagent")).toBeNull();
+    expect(repoFromFragment("#repo=a/b/c")).toBeNull();
+    expect(repoFromFragment("#repo=-a/b")).toBeNull();
+    expect(repoFromFragment("")).toBeNull();
+  });
+});
+
+describe("bootstrapCheckoutFromFragment", () => {
+  const win = (hash: string) => {
+    const calls: string[] = [];
+    return { calls, win: { location: { hash, pathname: "/", search: "" }, history: { replaceState: (_d: null, _u: string, url?: string | URL | null) => { calls.push(String(url)); } } } };
+  };
+  it("does nothing without a repo", async () => {
+    const w = win("#token=only");
+    expect(await bootstrapCheckoutFromFragment(w.win, async () => ({ paneId: "never" }))).toBeNull();
+    expect(w.calls).toEqual([]);
+  });
+  it("asks for the checkout with the token, answers the pane, and cleans the URL", async () => {
+    const w = win("#repo=polats/freeagent&gh=ghp_x");
+    const seen: unknown[] = [];
+    const pane = await bootstrapCheckoutFromFragment(w.win, async (repo, token) => { seen.push([repo, token]); return { paneId: "w2:p1" }; });
+    expect(pane).toBe("w2:p1");
+    expect(seen).toEqual([["polats/freeagent", "ghp_x"]]);
+    expect(w.calls).toEqual(["/"]);
+  });
+  it("answers null when the bridge declines, URL cleaned all the same", async () => {
+    const w = win("#repo=polats/freeagent");
+    expect(await bootstrapCheckoutFromFragment(w.win, async () => null)).toBeNull();
     expect(w.calls).toEqual(["/"]);
   });
 });

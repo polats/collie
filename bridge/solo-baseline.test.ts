@@ -603,6 +603,7 @@ describe("solo zero-tax — routes", () => {
       // The prompt-cache rule catalog (M28/02). A process-scoped READ, gated exactly as `/api/config`
       // is, and the only route this feature adds. Not forwarded across the crew link.
       "/api/cache-rules",
+      "/api/checkout",
       "/api/config",
       // The Crew overview (bridge/crew/status-wire.ts) — a FRONT-DOOR route, and it legitimately
       // extends this list rather than being exempted, exactly as pairing and STT do. It is not a
@@ -721,6 +722,9 @@ const CONFIG_KEYS = {
   trustedUser: true,
   trustedUserOptional: true,
   authToken: true,
+  checkoutCommand: true,
+  checkoutCwd: true,
+  checkoutTokenFile: true,
   deviceHeader: true,
   deviceAllowlist: true,
   allowedOrigins: true,
@@ -751,6 +755,9 @@ describe("solo zero-tax — config", () => {
       "basePath",
       "cacheRulesFile",
       "cacheWarnSeconds",
+      "checkoutCommand",
+      "checkoutCwd",
+      "checkoutTokenFile",
       "commandsFile",
       "deviceAllowlist",
       "deviceHeader",
@@ -828,6 +835,9 @@ describe("solo zero-tax — config", () => {
       "COLLIE_AUTH_TOKEN",
       "COLLIE_BASE_PATH",
       "COLLIE_CACHE_WARN_SECONDS",
+      "COLLIE_CHECKOUT_COMMAND",
+      "COLLIE_CHECKOUT_CWD",
+      "COLLIE_CHECKOUT_TOKEN_FILE",
       "COLLIE_CODEX_ROOT",
       "COLLIE_DEVICE_ALLOWLIST",
       "COLLIE_DEVICE_HEADER",

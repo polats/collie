@@ -309,6 +309,22 @@ export interface Config {
    */
   authToken: string;
   /**
+   * Checkout (`COLLIE_CHECKOUT_COMMAND`): an operator-provided command that clones a repository the
+   * phone names — `POST /api/checkout {repo}` opens a Space in {@link checkoutCwd} and types
+   * `<command> <owner/name>` into it, so the clone runs where the operator can watch it. The bridge
+   * supplies the command and validates the repository id strictly; the client never supplies a
+   * command line. Empty = the route is off (404). Built for a cloud box that starts from a repo
+   * (docs/deployment.md → Variant F), but any host with a `git`-wrapping script can use it.
+   */
+  checkoutCommand: string;
+  /** Where a checkout Space opens. Default: the operator's home. */
+  checkoutCwd: string;
+  /**
+   * File the route writes a caller-supplied access token into (mode 0600), for the checkout command
+   * to read — a private repository's token, say. Empty = a request carrying a token is refused.
+   */
+  checkoutTokenFile: string;
+  /**
    * How much of each value's content the audit trail keeps — see {@link AuditContent} in audit.ts
    * for what `none` does and does not redact.
    */
@@ -648,6 +664,9 @@ export function loadConfig(env: Environment = process.env): Config {
     trustedUser: env.COLLIE_TRUSTED_USER ?? "",
     trustedUserOptional: envBool("COLLIE_TRUSTED_USER_OPTIONAL", false, env),
     authToken: (env.COLLIE_AUTH_TOKEN ?? "").trim(),
+    checkoutCommand: (env.COLLIE_CHECKOUT_COMMAND ?? "").trim(),
+    checkoutCwd: (env.COLLIE_CHECKOUT_CWD ?? "").trim() || homedir(),
+    checkoutTokenFile: (env.COLLIE_CHECKOUT_TOKEN_FILE ?? "").trim(),
     auditContent: envEnum("COLLIE_AUDIT_CONTENT", ["preview", "none"] as const, "preview", env),
     deviceHeader: (env.COLLIE_DEVICE_HEADER ?? "").trim(),
     deviceAllowlist: envList("COLLIE_DEVICE_ALLOWLIST", env),

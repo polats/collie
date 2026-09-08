@@ -1,4 +1,5 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import { homedir } from "node:os";
 import { extname, join, normalize, sep } from "node:path";
 import type { JsonObject, JsonValue } from "./json.ts";
@@ -996,6 +997,16 @@ export function startServer(opts: {
       const rt = await caller.resolve();
       if (rt instanceof Response) return rt;
       return launch(rt.herdr, rt.engine, req, caller.audit, caller.device(), rt.name, operatorLaunchers);
+    }
+    // A checkout is a launch whose one argument the client may choose: a repository id, validated
+    // here, handed to the operator's COLLIE_CHECKOUT_COMMAND in a fresh Space (Config.checkoutCommand).
+    if (pathname === "/api/checkout" && req.method === "POST") {
+      if (cfg.checkoutCommand === "") return text("not found", 404);
+      const denied = caller.gate("write");
+      if (denied) return denied;
+      const rt = await caller.resolve();
+      if (rt instanceof Response) return rt;
+      return checkout(rt.herdr, rt.engine, req, caller.audit, caller.device(), rt.name, cfg);
     }
     // Rows must come from the host that runs them: today's `/api/config` (a lead-only body) sent
     // the LEAD's rows down even for a launch addressed at a peer via `?host=`. Session-scoped like
@@ -3435,6 +3446,107 @@ export async function cacheRulesRoute(
 // `["Enter"]` is literal here, NOT `cfg.submitKeys`: `COLLIE_SUBMIT_KEYS` is the agent-dependent
 // submit sequence for a TUI composer; this is a bare shell prompt where Enter is the only key that
 // means "run it".
+/** A repository id as GitHub spells it: `owner/name`, each segment a plain token, never a path. */
+export const REPO_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}\/[A-Za-z0-9_.-]{1,100}$/;
+
+export interface CheckoutRequest {
+  repo: string;
+  token: string | null;
+}
+
+/**
+ * Validate an untrusted `/api/checkout` body. The repo id must match {@link REPO_ID} exactly and
+ * contain no `..` segment — it is spliced into a shell line after the operator's command, so the
+ * grammar is the whole defence. A token is any non-empty string up to 4 KiB; the route decides
+ * whether it may accept one. Pure + exported for tests.
+ */
+export function parseCheckoutRequest(v: JsonValue | undefined): CheckoutRequest | null {
+  const o = asJsonRecord(v);
+  if (o === null) return null;
+  const repo = typeof o.repo === "string" ? o.repo.trim() : "";
+  if (!REPO_ID.test(repo) || repo.split("/").some((seg) => seg === "." || seg === "..")) return null;
+  const rawToken = typeof o.token === "string" ? o.token.trim() : "";
+  if (rawToken.length > 4096 || /[\r\n]/.test(rawToken)) return null;
+  return { repo, token: rawToken === "" ? null : rawToken };
+}
+
+/**
+ * Open a Space in the checkout directory and run the operator's checkout command on one validated
+ * repository id, optionally after writing an access token where that command reads it. Mirrors
+ * {@link launch}: create, wait for the prompt, type, audit, answer with the pane.
+ */
+export async function checkout(
+  herdr: MuxAdapter,
+  engine: StateEngine,
+  req: Request,
+  audit: AuditLog,
+  device: string | null,
+  session: string,
+  cfg: Pick<Config, "checkoutCommand" | "checkoutCwd" | "checkoutTokenFile">,
+  wait: PaneReadyOptions = {},
+): Promise<Response> {
+  const ae = req.headers.get("accept-encoding");
+  let body: JsonValue;
+  try {
+    // SAFETY: `Request.json()` output IS a JsonValue by construction; `parseCheckoutRequest`
+    // re-checks every field of it before any of it is used.
+    body = (await req.json()) as JsonValue;
+  } catch {
+    return text("bad body", 400);
+  }
+  const parsed = parseCheckoutRequest(body);
+  if (!parsed) return text("bad body", 400);
+  if (parsed.token !== null) {
+    if (cfg.checkoutTokenFile === "") return text("token not accepted here", 400);
+    await mkdir(dirname(cfg.checkoutTokenFile), { recursive: true });
+    await writeFile(cfg.checkoutTokenFile, parsed.token, { mode: 0o600 });
+  }
+  const label = parsed.repo.split("/")[1]!;
+  const outcome = await herdr.createSpace({ cwd: cfg.checkoutCwd, label });
+  if (!outcome.ok) {
+    return json(
+      { ok: false, ...apiError("workspace.create_failed", { reason: outcome.detail }) } satisfies CreateResponse,
+      ae,
+    );
+  }
+  const created = outcome.value;
+  const ready = await awaitPaneReady(herdr, created.paneId, wait);
+  if (!ready.ready) {
+    console.warn(`[checkout] pane ${created.paneId} did not settle after ${ready.ms}ms — sending anyway`);
+  }
+  const line = `${cfg.checkoutCommand} ${parsed.repo}`;
+  const sent = await sendReplySteps(herdr, created.paneId, line, true, ["Enter"], wait.sleep);
+  if (!sent.ok) {
+    try {
+      await herdr.closePane(created.paneId);
+    } catch {
+      // Best effort: the failure being reported is the send, not the close.
+    }
+    return json({ ok: false, error: sent.error, code: sent.code, detail: sent.detail } satisfies CreateResponse, ae);
+  }
+  audit.record({
+    action: "workspace.checkout",
+    paneId: created.paneId,
+    session,
+    device,
+    detail: { repo: parsed.repo, cwd: cfg.checkoutCwd, token: parsed.token !== null },
+  });
+  await settleTopology(herdr, engine);
+  return json(
+    {
+      ok: true,
+      pane: {
+        paneId: created.paneId,
+        workspaceId: created.spaceId,
+        workspaceLabel: created.spaceLabel,
+        tabId: created.tabId,
+        cwd: created.cwd,
+      },
+    } satisfies CreateResponse,
+    ae,
+  );
+}
+
 export async function launch(
   herdr: MuxAdapter,
   engine: StateEngine,

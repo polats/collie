@@ -30,6 +30,7 @@ import {
   NOT_PAIRED_BODY,
   paneReadResponse,
   readPane,
+  parseCheckoutRequest,
   parsePairRequest,
   parseSnoozeRequest,
   parseCacheWatchRequest,
@@ -157,6 +158,9 @@ function cfg(overrides: Partial<Config> = {}): Config {
     trustedUser: "",
     trustedUserOptional: false,
     authToken: "",
+    checkoutCommand: "",
+    checkoutCwd: "/tmp",
+    checkoutTokenFile: "",
     auditContent: "preview",
     deviceHeader: "",
     deviceAllowlist: [],
@@ -2065,10 +2069,11 @@ describe("the host gate — `?host=` selects among enrolled members and nothing 
     // The load-bearing claim: `?h=laptop` + `w1:p1` must never be served the DESK's `w1:p1`, and
     // pane ids collide across machines, so a fall-through here is a cross-host write.
     //
-    // All TEN session-scoped routes (tab create, workspace create, launch, this host's launcher
-    // rows, one journal blob, tab action, the pane family, "look now", the worktree listing and the
-    // worktree actions) reach their runtime through the caller's resolver and nothing else.
-    expect([...src.matchAll(/await caller\.resolve\(\);/g)]).toHaveLength(10);
+    // All ELEVEN session-scoped routes (tab create, workspace create, launch, this host's launcher
+    // rows, one journal blob, tab action, the pane family, "look now", the worktree listing, the
+    // worktree actions and the checkout) reach their runtime through the caller's resolver and
+    // nothing else.
+    expect([...src.matchAll(/await caller\.resolve\(\);/g)]).toHaveLength(11);
     // Exactly seven `registry.get(` calls remain, and each is a sanctioned one, named here rather
     // than exempted: assembling THIS collie's own snapshot body; `localRuntime`, the single
     // "(session) → runtime, or 404" helper both callers share; `/api/config`, which reports THIS
@@ -3282,5 +3287,25 @@ describe("cloud auth — COLLIE_AUTH_TOKEN gates every /api route", () => {
     expect(notes.some((w) => w.includes("cloud auth"))).toBe(true);
     expect(notes.some((w) => w.includes("only"))).toBe(false);
     expect(startupWarnings(cloud({ authToken: "short" })).some((w) => w.includes("only 5 characters"))).toBe(true);
+  });
+});
+
+// ── /api/checkout: the one launch whose argument the client chooses ─────────────────────────────
+// The repository id is spliced after the operator's command into a shell line, so its grammar is
+// the entire defence. Pin what passes and what does not.
+describe("parseCheckoutRequest — a repository id, nothing else", () => {
+  test("accepts owner/name and an optional token", () => {
+    expect(parseCheckoutRequest({ repo: "polats/freeagent" })).toEqual({ repo: "polats/freeagent", token: null });
+    expect(parseCheckoutRequest({ repo: " AltanS/collie.js ", token: "ghp_x" })).toEqual({ repo: "AltanS/collie.js", token: "ghp_x" });
+    expect(parseCheckoutRequest({ repo: "a/b", token: "  " })).toEqual({ repo: "a/b", token: null });
+  });
+  test("refuses anything that is not exactly one owner and one name", () => {
+    for (const bad of ["", "freeagent", "a/b/c", "/b", "a/", "a/b; rm -rf ~", "a/b\nc", "a/$(x)", "-a/b", "a/..", "../b", "https://github.com/a/b", "a b/c"]) {
+      expect(parseCheckoutRequest({ repo: bad })).toBeNull();
+    }
+    expect(parseCheckoutRequest({ repo: 1 })).toBeNull();
+    expect(parseCheckoutRequest("a/b")).toBeNull();
+    expect(parseCheckoutRequest({ repo: "a/b", token: "x".repeat(5000) })).toBeNull();
+    expect(parseCheckoutRequest({ repo: "a/b", token: "line\nbreak" })).toBeNull();
   });
 });

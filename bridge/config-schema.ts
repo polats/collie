@@ -216,6 +216,33 @@ export const CONFIG_SETTINGS: readonly ConfigSetting[] = [
     doc: "Where runtime state lives. Empty takes ~/.local/state/collie.",
     configField: "stateDir",
   },
+  {
+    key: "checkout_command",
+    env: "COLLIE_CHECKOUT_COMMAND",
+    section: "bridge",
+    kind: "string",
+    default: "",
+    doc: "The clone command POST /api/checkout types into a new Space, given one validated owner/name. Empty turns the route off.",
+    configField: "checkoutCommand",
+  },
+  {
+    key: "checkout_cwd",
+    env: "COLLIE_CHECKOUT_CWD",
+    section: "bridge",
+    kind: "string",
+    default: "",
+    doc: "The folder the checkout Space opens in. Empty takes the home directory.",
+    configField: "checkoutCwd",
+  },
+  {
+    key: "checkout_token_file",
+    env: "COLLIE_CHECKOUT_TOKEN_FILE",
+    section: "bridge",
+    kind: "string",
+    default: "",
+    doc: "Where a caller-supplied token for the clone is written, mode 600. Empty ignores the token.",
+    configField: "checkoutTokenFile",
+  },
 
   // ── network ────────────────────────────────────────────────────────────────
   {
