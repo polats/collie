@@ -8,10 +8,18 @@
 // via `POST /api/pair/token`, stores that like any paired token, and strips the fragment from the
 // URL so a reload, a share or a screenshot does not carry the root secret anywhere.
 //
-// Nothing here runs when there is no fragment, which is every load but the first.
+// The fragment arrives on later loads too: a landing page that keeps the secret per box appends it
+// on every open. Those loads are how a phone RECOVERS after the bridge lost its pairing registry
+// (a container without a volume that slept and woke, a rebuild, a factory reset): the stored device
+// token is dead, every /api answer is `403 device not paired`, and the only credential that still
+// works is the root secret in the fragment. So a device that already holds a token first asks the
+// bridge whether the token is still good, and re-enrols with the secret only when it is not.
+//
+// Nothing here runs when there is no fragment, which is every load on a bridge that was not handed
+// one.
 
 import { asJsonObject, asJsonString, parseJsonObject } from "./json";
-import { TOKEN_STORAGE_KEY, authHeader, getDeviceToken, setDeviceToken } from "./pairing";
+import { NOT_PAIRED_BODY, TOKEN_STORAGE_KEY, authHeader, getDeviceToken, setDeviceToken } from "./pairing";
 
 /** The fragment parameter carrying the root secret. */
 export const TOKEN_FRAGMENT_KEY = "token";
@@ -49,22 +57,38 @@ export function defaultDeviceLabel(now: Date = new Date(), ua: string = navigato
   return `${kind} ${stamp}`;
 }
 
-/**
- * Consume a `#token=` fragment if there is one: enrol this device with it and store the device
- * token. Resolves once the URL is clean, whether or not enrolment succeeded — a failure is not
- * fatal (the app then shows the ordinary "pair this device" path), but the secret must not stay in
- * the address bar either way. Idempotent: a device that already holds a token skips the exchange.
- */
 /** The two window facets the bootstrap touches — narrow so a test can hand in a plain object. */
 export interface BootstrapWindow {
   location: Pick<Location, "hash" | "pathname" | "search">;
   history: Pick<History, "replaceState">;
 }
 
+/**
+ * What the bridge says about the device token this phone already holds. `stale` is the one verdict
+ * that changes anything: the bridge answered and does not know the token. `unknown` (unreachable,
+ * an unexpected status) leaves the token alone — no evidence is not evidence of a dead token.
+ */
+export type StoredTokenVerdict = "valid" | "stale" | "unknown";
+
+/** What one run of the bootstrap did. `re-paired` is `paired` for a device whose token had died. */
+export type BootstrapResult = "paired" | "re-paired" | "already-paired" | "failed" | "none";
+
+/**
+ * Consume a `#token=` fragment if there is one: enrol this device with it and store the device
+ * token. Resolves once the URL is clean, whether or not enrolment succeeded — a failure is not
+ * fatal (the app then shows the ordinary "pair this device" path), but the secret must not stay in
+ * the address bar either way.
+ *
+ * A device that already holds a token does not blindly skip the exchange: it asks the bridge
+ * whether that token is still recognised (`probe`) and re-enrols only on a definite "no". A bridge
+ * that lost its registry — the wake-from-sleep case — is thus healed by the same fragment the
+ * landing page sends on every open, and a bridge that still knows the phone mints nothing new.
+ */
 export async function bootstrapPairingFromFragment(
   win: BootstrapWindow = window,
   enroll: (rootToken: string, label: string) => Promise<{ token: string }> = enrollWithRootToken,
-): Promise<"paired" | "already-paired" | "failed" | "none"> {
+  probe: () => Promise<StoredTokenVerdict> = probeStoredToken,
+): Promise<BootstrapResult> {
   const rootToken = tokenFromFragment(win.location.hash);
   if (rootToken === null) return "none";
   // Pairing is the first thing the fragment asks for, but not always the only thing (see
@@ -79,18 +103,41 @@ export async function bootstrapPairingFromFragment(
       // A history API that refuses (sandboxed frame) leaves the fragment; nothing else to do.
     }
   };
-  if (getDeviceToken() !== null) {
+  const held = getDeviceToken() !== null;
+  if (held && (await probe()) !== "stale") {
     clean();
     return "already-paired";
   }
   try {
     const { token } = await enroll(rootToken, defaultDeviceLabel());
+    // Replaces the dead token only now, on success: a failed re-enrolment leaves the old one in
+    // place, so the refusal latch (lib/api.ts) can still show the pairing path instead of a device
+    // that silently forgot it was ever paired.
     setDeviceToken(token);
     clean();
-    return "paired";
+    return held ? "re-paired" : "paired";
   } catch {
     clean();
     return "failed";
+  }
+}
+
+/**
+ * Ask the bridge whether the stored device token still names a paired device. `GET /api/devices` is
+ * read-level and answers `current`: this token's label, or null when it authenticated as nobody.
+ * Under cloud auth an unknown token never gets that far — it is refused with the pairing gate's own
+ * `403 device not paired`, which is the same verdict. Anything else (unreachable, 5xx, a proxy's
+ * page) is `unknown`: the token may well be fine and the bridge is simply not answering yet.
+ */
+export async function probeStoredToken(): Promise<StoredTokenVerdict> {
+  try {
+    const res = await fetch("/api/devices", { headers: authHeader() });
+    if (res.status === 403) return (await res.text()).trim() === NOT_PAIRED_BODY ? "stale" : "unknown";
+    if (!res.ok) return "unknown";
+    const current = asJsonString(parseJsonObject(await res.text())?.current);
+    return current !== undefined && current !== "" ? "valid" : "stale";
+  } catch {
+    return "unknown";
   }
 }
 

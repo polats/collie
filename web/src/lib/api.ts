@@ -251,16 +251,19 @@ function promptChangedResponse(detail: string): ActionResponse | null {
 /**
  * Read the pairing gate's verdict off a finished request, at the one place every request passes.
  *
- * Only a WRITE can discover that this device is unpaired — reads are ungated — so the refusal latch
- * is set here, from the bridge's own 403 body, and cleared by the opposite proof: a mutation that
- * actually went through. GETs say nothing either way and are ignored on both counts.
+ * The refusal latch is set here, from the bridge's own 403 body, and cleared by the opposite proof:
+ * a mutation that actually went through. The body is the whole test, whatever the method: a plain
+ * bridge refuses only writes for want of pairing, but one under cloud auth (`COLLIE_AUTH_TOKEN`)
+ * refuses reads too, and a poll that comes back `device not paired` is the first — often the only —
+ * thing a phone whose token died sees. A successful GET proves nothing (reads are ungated on a plain
+ * bridge, so an unpaired device gets them too) and is ignored.
  */
 function notePairing(method: string, status: number, detail?: string): void {
-  if (method === "GET") return;
   if (status === 403 && detail?.trim() === NOT_PAIRED_BODY) {
     markNotPaired();
     return;
   }
+  if (method === "GET") return;
   if (status >= 200 && status < 300) clearNotPaired();
 }
 

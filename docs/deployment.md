@@ -289,6 +289,16 @@ What `COLLIE_AUTH_TOKEN` changes:
   of its own, which is then revocable like any other under Settings.
 - **`collie pair` still works.** The code door stays reachable without a credential, because a code
   is a credential.
+- **A `#token=` fragment also heals a phone whose device token died.** Device tokens live in the
+  state directory (`paired-devices.json`); a container with no volume loses them every time it
+  restarts — a Space that slept and woke, a rebuild — while the root secret survives as a platform
+  secret. On a load with the fragment, a phone that already holds a token first asks
+  `GET /api/devices` whether the bridge still knows it and re-enrols with the secret only when the
+  answer is the pairing gate's `403 device not paired` (or a reply that names nobody). A bridge that
+  still knows the phone mints nothing. A provisioning page that keeps the secret per box can
+  therefore send it on every open. Under cloud auth a refused read also raises the phone's
+  "pair this device" state, so a box opened without the fragment says what is wrong instead of
+  showing an empty dashboard.
 
 `COLLIE_TRUSTED_USER` and `COLLIE_DEVICE_HEADER` have no effect here — no proxy injects them.
 The token is a root login to a shell on the container: generate it with something like

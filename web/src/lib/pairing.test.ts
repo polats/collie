@@ -139,11 +139,25 @@ describe("the not-paired latch", () => {
     expect(isNotPaired()).toBe(false);
   });
 
-  it("is never set by a read, which is ungated and says nothing either way", async () => {
+  it("is not set by a read refused for any other reason", async () => {
     server.use(http.get("/api/snapshot", () => new HttpResponse("nope", { status: 403 })));
     // fetchSnapshot throws; the loader swallows it. What matters is the latch stayed down.
     await expect(fetchSnapshot()).rejects.toThrow(/403/);
     expect(isNotPaired()).toBe(false);
+  });
+
+  it("latches on a READ refused with the not-paired body — cloud auth gates reads too", async () => {
+    // A bridge under COLLIE_AUTH_TOKEN that lost its pairing registry refuses the very first poll
+    // this way; nothing else on the phone would ever learn its token died.
+    server.use(http.get("/api/snapshot", () => new HttpResponse(NOT_PAIRED_BODY, { status: 403 })));
+    await expect(fetchSnapshot()).rejects.toThrow(/403/);
+    expect(isNotPaired()).toBe(true);
+  });
+
+  it("is not cleared by a read that succeeds — reads are ungated on a plain bridge", async () => {
+    markNotPaired();
+    await fetchSnapshot();
+    expect(isNotPaired()).toBe(true);
   });
 
   it("__resetPairing notifies subscribers, same as markNotPaired/clearNotPaired", () => {
