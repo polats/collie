@@ -8,6 +8,13 @@
 // via `POST /api/pair/token`, stores that like any paired token, and strips the fragment from the
 // URL so a reload, a share or a screenshot does not carry the root secret anywhere.
 //
+// A second credential rides the same fragment: `#gh=<GitHub access token>`. A box whose bridge
+// knows its owner (`COLLIE_GITHUB_OWNER`) enrols a device that proves it holds the owner's GitHub
+// sign-in, via `POST /api/pair/github`, so a landing page the user signed in to with GitHub can
+// open the box from ANY device without the root secret ever leaving the box's creation. The
+// GitHub token is used for that one exchange and dropped, on both ends. When both credentials are
+// present GitHub is tried first, and the root secret is the fallback.
+//
 // The fragment arrives on later loads too: a landing page that keeps the secret per box appends it
 // on every open. Those loads are how a phone RECOVERS after the bridge lost its pairing registry
 // (a container without a volume that slept and woke, a rebuild, a factory reset): the stored device
@@ -25,6 +32,11 @@ import { NOT_PAIRED_BODY, TOKEN_STORAGE_KEY, authHeader, getDeviceToken, setDevi
 export const TOKEN_FRAGMENT_KEY = "token";
 /** Fragment parameters naming a repository to check out on first load, and its access token. */
 export const REPO_FRAGMENT_KEY = "repo";
+/**
+ * A GitHub access token. It serves two consumers: pairing by identity (this module's first step),
+ * and a private repository's checkout (`bootstrapCheckoutFromFragment`), which is why the pairing
+ * step leaves it in the fragment while a `repo=` is present and strips it otherwise.
+ */
 export const REPO_TOKEN_FRAGMENT_KEY = "gh";
 
 /** One fragment parameter's trimmed value, or null when absent or blank. */
@@ -74,6 +86,25 @@ export type StoredTokenVerdict = "valid" | "stale" | "unknown";
 export type BootstrapResult = "paired" | "re-paired" | "already-paired" | "failed" | "none";
 
 /**
+ * Something the fragment carried that can mint a device token: the bridge's root secret, or a
+ * GitHub access token of the bridge's owner. Each has its own door on the bridge.
+ */
+export interface PairingCredential {
+  kind: "root" | "github";
+  token: string;
+}
+
+/** The credentials a fragment carries, in the order they are tried: GitHub identity, then root. */
+export function credentialsFromFragment(hash: string): PairingCredential[] {
+  const out: PairingCredential[] = [];
+  const gh = fragmentParam(hash, REPO_TOKEN_FRAGMENT_KEY);
+  if (gh !== null) out.push({ kind: "github", token: gh });
+  const root = tokenFromFragment(hash);
+  if (root !== null) out.push({ kind: "root", token: root });
+  return out;
+}
+
+/**
  * Consume a `#token=` fragment if there is one: enrol this device with it and store the device
  * token. Resolves once the URL is clean, whether or not enrolment succeeded — a failure is not
  * fatal (the app then shows the ordinary "pair this device" path), but the secret must not stay in
@@ -86,17 +117,20 @@ export type BootstrapResult = "paired" | "re-paired" | "already-paired" | "faile
  */
 export async function bootstrapPairingFromFragment(
   win: BootstrapWindow = window,
-  enroll: (rootToken: string, label: string) => Promise<{ token: string }> = enrollWithRootToken,
+  enroll: (credential: PairingCredential, label: string) => Promise<{ token: string }> = enrollWithCredential,
   probe: () => Promise<StoredTokenVerdict> = probeStoredToken,
 ): Promise<BootstrapResult> {
-  const rootToken = tokenFromFragment(win.location.hash);
-  if (rootToken === null) return "none";
+  const credentials = credentialsFromFragment(win.location.hash);
+  if (credentials.length === 0) return "none";
   // Pairing is the first thing the fragment asks for, but not always the only thing (see
-  // `bootstrapCheckoutFromFragment`): keep the rest of the fragment for that step, drop the secret.
+  // `bootstrapCheckoutFromFragment`): keep the rest of the fragment for that step, drop the
+  // secrets — the GitHub token too, unless a `repo=` still needs it for the checkout, which strips
+  // the whole fragment when it is done.
   const clean = () => {
     try {
       const rest = new URLSearchParams(win.location.hash.replace(/^#/, ""));
       rest.delete(TOKEN_FRAGMENT_KEY);
+      if (!rest.has(REPO_FRAGMENT_KEY)) rest.delete(REPO_TOKEN_FRAGMENT_KEY);
       const hash = rest.toString();
       win.history.replaceState(null, "", win.location.pathname + win.location.search + (hash ? `#${hash}` : ""));
     } catch {
@@ -108,18 +142,22 @@ export async function bootstrapPairingFromFragment(
     clean();
     return "already-paired";
   }
-  try {
-    const { token } = await enroll(rootToken, defaultDeviceLabel());
-    // Replaces the dead token only now, on success: a failed re-enrolment leaves the old one in
-    // place, so the refusal latch (lib/api.ts) can still show the pairing path instead of a device
-    // that silently forgot it was ever paired.
-    setDeviceToken(token);
-    clean();
-    return held ? "re-paired" : "paired";
-  } catch {
-    clean();
-    return "failed";
+  const label = defaultDeviceLabel();
+  for (const credential of credentials) {
+    try {
+      const { token } = await enroll(credential, label);
+      // Replaces the dead token only now, on success: a failed re-enrolment leaves the old one in
+      // place, so the refusal latch (lib/api.ts) can still show the pairing path instead of a
+      // device that silently forgot it was ever paired.
+      setDeviceToken(token);
+      clean();
+      return held ? "re-paired" : "paired";
+    } catch {
+      // Try the next credential; the root secret backs the identity door up.
+    }
   }
+  clean();
+  return "failed";
 }
 
 /**
@@ -180,16 +218,23 @@ async function requestCheckout(repo: string, token: string | null): Promise<{ pa
   return paneId === undefined ? null : { paneId };
 }
 
-/** `POST /api/pair/token` with the root secret as the bearer. Kept out of api.ts's `req` so the
- * root secret never rides the device-token header path — this is the one request that authorises
- * with something other than this device's own token. */
-async function enrollWithRootToken(rootToken: string, label: string): Promise<{ token: string }> {
-  const res = await fetch("/api/pair/token", {
+/** The bridge's door for each credential kind. */
+export const PAIRING_DOORS = {
+  root: "/api/pair/token",
+  github: "/api/pair/github",
+} satisfies Record<PairingCredential["kind"], string>;
+
+/** `POST` the credential's door with it as the bearer. Kept out of api.ts's `req` so neither secret
+ * ever rides the device-token header path — these are the requests that authorise with something
+ * other than this device's own token. */
+async function enrollWithCredential(credential: PairingCredential, label: string): Promise<{ token: string }> {
+  const door = PAIRING_DOORS[credential.kind];
+  const res = await fetch(door, {
     method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${rootToken}` },
+    headers: { "content-type": "application/json", authorization: `Bearer ${credential.token}` },
     body: JSON.stringify({ label }),
   });
-  if (!res.ok) throw new Error(`/api/pair/token → ${res.status}`);
+  if (!res.ok) throw new Error(`${door} → ${res.status}`);
   // Parsed at the I/O boundary with the JSON helpers, like every other bridge reply (lib/json.ts).
   const token = asJsonString(parseJsonObject(await res.text())?.token);
   if (token === undefined || token === "") throw new Error("no token in reply");

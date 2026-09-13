@@ -39,6 +39,9 @@ PATH. Details and rollback: [`docs/upgrading.md`](./docs/upgrading.md) → *Upgr
   (a Space that slept and woke without a volume): the bootstrap asks `GET /api/devices` first and
   re-enrols only on a definite refusal. A read refused with `device not paired` now raises the
   not-paired state too, since under cloud auth reads are gated and the poll is what discovers it.
+- Cloud auth: pairing by GitHub identity. `COLLIE_GITHUB_OWNER=<login>` opens `POST /api/pair/github`,
+  which enrols a device whose bearer is a GitHub access token of that login (verified against
+  `api.github.com/user`, never stored). The PWA consumes a `#gh=` fragment, tried before `#token=`.
 
 ### Changed
 - **An update puts the phone in update mode until it is done.** Tap "Update all machines to X" on the Updates page, and the first screen of update mode names every machine and this phone, with Start update as the confirm; the card no longer grows a confirm inside itself. While the update runs, your app stays in view behind a veil and takes no tap. A band at the top says "Update mode · step N of 7" with a clock and a progress bar, and a panel at the bottom walks the seven steps: Check, Build, Restart, Verify, Other machines, This phone, Done. Each machine has a row with its versions, and only the row that is working moves. A member that stops answering, or waits out its hourly limit, gets "Skip <name>" and "Keep trying". The update ends on a Done, Rolled back or Stuck screen with "Back to the app", never on a toast alone. Another phone or tablet keeps its app and shows one line, "Update running, started on another device", with View. Nothing in the panel moves from one step to the next (ADR 0064).

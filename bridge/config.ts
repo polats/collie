@@ -309,6 +309,15 @@ export interface Config {
    */
   authToken: string;
   /**
+   * Pairing by GitHub identity (`COLLIE_GITHUB_OWNER`): the GitHub login that owns this bridge. When
+   * set, `POST /api/pair/github` enrols a device whose bearer is a GitHub access token belonging to
+   * that login — the bridge asks GitHub whose token it is and keeps nothing. Built for a cloud box
+   * created from a page the owner signed in to with GitHub, so a second phone needs no root secret
+   * and no code, only the same sign-in. Empty = the route is off (404). (docs/deployment.md →
+   * Variant F.)
+   */
+  githubOwner: string;
+  /**
    * Checkout (`COLLIE_CHECKOUT_COMMAND`): an operator-provided command that clones a repository the
    * phone names — `POST /api/checkout {repo}` opens a Space in {@link checkoutCwd} and types
    * `<command> <owner/name>` into it, so the clone runs where the operator can watch it. The bridge
@@ -664,6 +673,7 @@ export function loadConfig(env: Environment = process.env): Config {
     trustedUser: env.COLLIE_TRUSTED_USER ?? "",
     trustedUserOptional: envBool("COLLIE_TRUSTED_USER_OPTIONAL", false, env),
     authToken: (env.COLLIE_AUTH_TOKEN ?? "").trim(),
+    githubOwner: (env.COLLIE_GITHUB_OWNER ?? "").trim(),
     checkoutCommand: (env.COLLIE_CHECKOUT_COMMAND ?? "").trim(),
     checkoutCwd: (env.COLLIE_CHECKOUT_CWD ?? "").trim() || homedir(),
     checkoutTokenFile: (env.COLLIE_CHECKOUT_TOKEN_FILE ?? "").trim(),

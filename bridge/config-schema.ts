@@ -414,6 +414,15 @@ export const CONFIG_SETTINGS: readonly ConfigSetting[] = [
     configField: "authToken",
   },
   {
+    key: "github_owner",
+    env: "COLLIE_GITHUB_OWNER",
+    section: "access",
+    kind: "string",
+    default: "",
+    doc: "The GitHub login that owns this bridge. POST /api/pair/github enrols a device whose GitHub token belongs to it. Empty turns the route off.",
+    configField: "githubOwner",
+  },
+  {
     key: "device_header",
     env: "COLLIE_DEVICE_HEADER",
     section: "access",

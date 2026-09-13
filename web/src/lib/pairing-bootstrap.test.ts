@@ -5,10 +5,12 @@ import { server } from "@/test/setup";
 import {
   bootstrapCheckoutFromFragment,
   bootstrapPairingFromFragment,
+  credentialsFromFragment,
   defaultDeviceLabel,
   probeStoredToken,
   repoFromFragment,
   tokenFromFragment,
+  type PairingCredential,
 } from "./pairing-bootstrap";
 import { NOT_PAIRED_BODY, TOKEN_STORAGE_KEY } from "./pairing";
 
@@ -63,13 +65,13 @@ describe("bootstrapPairingFromFragment", () => {
   it("trades the root secret for a device token, stores it, and cleans the URL", async () => {
     localStorage.removeItem(TOKEN_STORAGE_KEY);
     const w = win("#token=root-secret");
-    const seen: string[] = [];
-    const result = await bootstrapPairingFromFragment(w.win, async (root) => {
-      seen.push(root);
+    const seen: PairingCredential[] = [];
+    const result = await bootstrapPairingFromFragment(w.win, async (cred) => {
+      seen.push(cred);
       return { token: "device-token" };
     });
     expect(result).toBe("paired");
-    expect(seen).toEqual(["root-secret"]);
+    expect(seen).toEqual([{ kind: "root", token: "root-secret" }]);
     expect(localStorage.getItem(TOKEN_STORAGE_KEY)).toBe("device-token");
     expect(w.calls).toEqual(["/"]);
   });
@@ -86,17 +88,17 @@ describe("bootstrapPairingFromFragment", () => {
     // and the landing page sent the secret along as it does on every open.
     localStorage.setItem(TOKEN_STORAGE_KEY, "dead");
     const w = win("#token=root-secret");
-    const seen: string[] = [];
+    const seen: PairingCredential[] = [];
     const result = await bootstrapPairingFromFragment(
       w.win,
-      async (root) => {
-        seen.push(root);
+      async (cred) => {
+        seen.push(cred);
         return { token: "fresh" };
       },
       async () => "stale",
     );
     expect(result).toBe("re-paired");
-    expect(seen).toEqual(["root-secret"]);
+    expect(seen).toEqual([{ kind: "root", token: "root-secret" }]);
     expect(localStorage.getItem(TOKEN_STORAGE_KEY)).toBe("fresh");
     expect(w.calls).toEqual(["/"]);
   });
@@ -129,6 +131,39 @@ describe("bootstrapPairingFromFragment", () => {
     expect(localStorage.getItem(TOKEN_STORAGE_KEY)).toBe("dead");
     expect(w.calls).toEqual(["/"]);
   });
+  it("pairs by GitHub identity from a #gh= fragment, and strips the token when no checkout needs it", async () => {
+    localStorage.removeItem(TOKEN_STORAGE_KEY);
+    const w = win("#gh=gho_abc");
+    const seen: PairingCredential[] = [];
+    const result = await bootstrapPairingFromFragment(w.win, async (cred) => {
+      seen.push(cred);
+      return { token: "dev" };
+    });
+    expect(result).toBe("paired");
+    expect(seen).toEqual([{ kind: "github", token: "gho_abc" }]);
+    expect(localStorage.getItem(TOKEN_STORAGE_KEY)).toBe("dev");
+    expect(w.calls).toEqual(["/"]);
+  });
+  it("tries GitHub first and falls back to the root secret when the identity door refuses", async () => {
+    localStorage.removeItem(TOKEN_STORAGE_KEY);
+    const w = win("#token=root-secret&gh=gho_abc");
+    const seen: PairingCredential[] = [];
+    const result = await bootstrapPairingFromFragment(w.win, async (cred) => {
+      seen.push(cred);
+      if (cred.kind === "github") throw new Error("/api/pair/github → 404");
+      return { token: "via-root" };
+    });
+    expect(result).toBe("paired");
+    expect(seen.map((c) => c.kind)).toEqual(["github", "root"]);
+    expect(localStorage.getItem(TOKEN_STORAGE_KEY)).toBe("via-root");
+    expect(w.calls).toEqual(["/"]);
+  });
+  it("leaves the GitHub token in the fragment while a repo= still needs it for the checkout", async () => {
+    localStorage.removeItem(TOKEN_STORAGE_KEY);
+    const w = win("#token=root&repo=polats/freeagent&gh=gho_abc");
+    expect(await bootstrapPairingFromFragment(w.win, async () => ({ token: "dev" }))).toBe("paired");
+    expect(w.calls).toEqual(["/#repo=polats%2Ffreeagent&gh=gho_abc"]);
+  });
   it("does not probe at all when no token is stored", async () => {
     localStorage.removeItem(TOKEN_STORAGE_KEY);
     const w = win("#token=root-secret");
@@ -153,6 +188,16 @@ describe("bootstrapPairingFromFragment", () => {
     const w = win("#token=root&repo=polats/freeagent");
     expect(await bootstrapPairingFromFragment(w.win, async () => ({ token: "dev" }))).toBe("paired");
     expect(w.calls).toEqual(["/#repo=polats%2Ffreeagent"]);
+  });
+});
+
+describe("credentialsFromFragment", () => {
+  it("orders GitHub identity before the root secret and skips blanks", () => {
+    expect(credentialsFromFragment("#token=r&gh=g")).toEqual([{ kind: "github", token: "g" }, { kind: "root", token: "r" }]);
+    expect(credentialsFromFragment("#gh=g")).toEqual([{ kind: "github", token: "g" }]);
+    expect(credentialsFromFragment("#token=r&gh=")).toEqual([{ kind: "root", token: "r" }]);
+    expect(credentialsFromFragment("#repo=a/b")).toEqual([]);
+    expect(credentialsFromFragment("")).toEqual([]);
   });
 });
 

@@ -7,6 +7,7 @@ import type { ActivityLedger } from "./activity.ts";
 import { type AuditDetail, type AuditEntry, AuditLog } from "./audit.ts";
 import { isLoopbackBindHost, type Config } from "./config.ts";
 import { apiError, type ApiErrorBody, type ApiErrorDetail, type ErrorCode } from "./error-codes.ts";
+import { verifyGithubOwner } from "./identity";
 import { MUX_CAPABILITIES, type MuxCapability, type MuxCapabilityDeclaration } from "./mux/capabilities.ts";
 import type { MuxAdapter, MuxAck, MuxGrid } from "./mux/types.ts";
 import { allCacheRules } from "./cache/rules/index.ts";
@@ -2003,6 +2004,52 @@ export function startServer(opts: {
       // its own — the root secret rides in a URL fragment once, the phone trades it for a device
       // token here, and the device is then revocable on its own like any other. 404 when cloud auth
       // is off: without a root token there is nothing this door could check.
+      // Pairing by GitHub identity (docs/deployment.md → Variant F): the box's owner proves who they
+      // are to GitHub instead of holding the root secret. The bearer is a GitHub access token; the
+      // bridge asks GitHub whose it is, enrols the device when that login is COLLIE_GITHUB_OWNER, and
+      // forgets the token. A bootstrap door like the two below — a device that has never paired holds
+      // nothing else — and still same-origin: `checkAccess(…, "write")` demands an Origin from a
+      // browser, so no cross-site page can spend a token it somehow holds. 404 when no owner is
+      // configured: there is nothing to compare against.
+      if (pathname === "/api/pair/github" && req.method === "POST") {
+        if (!pairing) return text("pairing unavailable", 503);
+        if (cfg.githubOwner === "") return text("not found", 404);
+        const gate = checkAccess(req, cfg, "write", { pairing, bootstrap: true });
+        if (!gate.ok) return text(gate.reason, 403);
+        const identityToken = bearerToken(req.headers);
+        if (identityToken === null || identityToken === "") return text("credential required", 403);
+        let body: JsonValue;
+        try {
+          // SAFETY: `Request.json()` output IS a JsonValue by construction; `normalizeLabel`
+          // re-checks the one field of it that is used.
+          body = (await req.json()) as JsonValue;
+        } catch {
+          return jsonError(apiError("pairing.bad_request"), 400, req.headers.get("accept-encoding"));
+        }
+        const label = normalizeLabel(asJsonRecord(body)?.label);
+        if (label === null) {
+          return jsonError(apiError("pairing.bad_request"), 400, req.headers.get("accept-encoding"));
+        }
+        const verdict = await verifyGithubOwner(identityToken, cfg.githubOwner);
+        if (!verdict.ok) {
+          // Three different remedies, three different sentences: GitHub did not recognise the token
+          // (sign in again), it belongs to someone else (sign in as the owner), or GitHub could not
+          // be asked (try again) — the last is a 502, not a refusal.
+          if (verdict.reason === "upstream") return text("github unavailable", 502);
+          return text(verdict.reason === "unauthorized" ? "identity refused" : "not the owner", 403);
+        }
+        const enrolled = await pairing.enroll(label);
+        if (!enrolled.ok) {
+          return jsonError(
+            apiError(PAIRING_ERROR_CODES[enrolled.reason]),
+            400,
+            req.headers.get("accept-encoding"),
+          );
+        }
+        audit.record({ action: "pair", device: label, detail: { label, via: "github", login: verdict.login } });
+        // The ONLY time this token exists outside the requesting device. Nothing stores it here.
+        return json({ token: enrolled.token, label }, req.headers.get("accept-encoding"));
+      }
       if (pathname === "/api/pair/token" && req.method === "POST") {
         if (!pairing) return text("pairing unavailable", 503);
         if (cfg.authToken === "") return text("not found", 404);
@@ -2185,6 +2232,11 @@ export function startupWarnings(cfg: Config): string[] {
         `[bridge] WARNING: COLLIE_AUTH_TOKEN is only ${cfg.authToken.length} characters. It is a root credential on a public URL — use at least 24 random characters.`,
       );
     }
+  }
+  if (cfg.githubOwner !== "") {
+    warnings.push(
+      `[bridge] pairing by GitHub identity: POST /api/pair/github enrols a device whose GitHub token belongs to ${cfg.githubOwner} (COLLIE_GITHUB_OWNER).`,
+    );
   }
   if (!isLoopbackBindHost(cfg.host)) {
     warnings.push(

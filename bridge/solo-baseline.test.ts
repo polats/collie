@@ -645,6 +645,7 @@ describe("solo zero-tax — routes", () => {
       // browser answering its own operator. A solo instance registers it and 404s
       // (`crew.not_lead`) — the same shape `/api/stt` has when no provider is configured.
       "/api/pair",
+      "/api/pair/github",
       "/api/pair/token",
       // "Look now" (ADR 0031) — a SOLO route that legitimately extends this list, named here rather
       // than exempted. It is session-scoped and read-gated, and it registers no crew route of its
@@ -722,6 +723,7 @@ const CONFIG_KEYS = {
   trustedUser: true,
   trustedUserOptional: true,
   authToken: true,
+  githubOwner: true,
   checkoutCommand: true,
   checkoutCwd: true,
   checkoutTokenFile: true,
@@ -763,6 +765,7 @@ describe("solo zero-tax — config", () => {
       "deviceHeader",
       "dialMode",
       "fontsDir",
+      "githubOwner",
       "host",
       "journalRoots",
       "keysFile",
@@ -841,6 +844,7 @@ describe("solo zero-tax — config", () => {
       "COLLIE_CODEX_ROOT",
       "COLLIE_DEVICE_ALLOWLIST",
       "COLLIE_DEVICE_HEADER",
+      "COLLIE_GITHUB_OWNER",
       "COLLIE_GROK_ROOT",
       "COLLIE_HERDR_DIAL",
       "COLLIE_HERMES_ROOT",
