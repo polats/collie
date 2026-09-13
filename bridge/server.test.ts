@@ -146,6 +146,7 @@ function cfg(overrides: Partial<Config> = {}): Config {
     trustedUser: "",
     trustedUserOptional: false,
     authToken: "",
+    githubOwner: "",
     checkoutCommand: "",
     checkoutCwd: "/tmp",
     checkoutTokenFile: "",
@@ -2984,6 +2985,8 @@ describe("cloud auth — COLLIE_AUTH_TOKEN gates every /api route", () => {
     expect(notes.some((w) => w.includes("cloud auth"))).toBe(true);
     expect(notes.some((w) => w.includes("only"))).toBe(false);
     expect(startupWarnings(cloud({ authToken: "short" })).some((w) => w.includes("only 5 characters"))).toBe(true);
+    expect(startupWarnings(cloud({ githubOwner: "polats" })).some((w) => w.includes("GitHub identity") && w.includes("polats"))).toBe(true);
+    expect(startupWarnings(cloud()).some((w) => w.includes("GitHub identity"))).toBe(false);
   });
 });
 

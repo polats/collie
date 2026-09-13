@@ -289,6 +289,13 @@ What `COLLIE_AUTH_TOKEN` changes:
   of its own, which is then revocable like any other under Settings.
 - **`collie pair` still works.** The code door stays reachable without a credential, because a code
   is a credential.
+- **Pairing by GitHub identity (`COLLIE_GITHUB_OWNER=<login>`).** When the bridge knows which GitHub
+  account owns it, `POST /api/pair/github` with `Authorization: Bearer <GitHub access token>` and
+  `{"label": "phone"}` enrols a device if GitHub says the token belongs to that login. The bridge
+  asks `api.github.com/user` once and keeps nothing. Refusals are `403 identity refused` (GitHub did
+  not recognise the token), `403 not the owner`, or `502 github unavailable`; `404` when no owner is
+  configured. The phone consumes it from a `#gh=<token>` fragment, tried before `#token=`, so a page
+  the owner signed in to with GitHub can open the box from any device with no root secret in hand.
 - **A `#token=` fragment also heals a phone whose device token died.** Device tokens live in the
   state directory (`paired-devices.json`); a container with no volume loses them every time it
   restarts — a Space that slept and woke, a rebuild — while the root secret survives as a platform

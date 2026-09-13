@@ -38,6 +38,9 @@ PATH. Details and rollback: [`docs/upgrading.md`](./docs/upgrading.md) → *Upgr
   (a Space that slept and woke without a volume): the bootstrap asks `GET /api/devices` first and
   re-enrols only on a definite refusal. A read refused with `device not paired` now raises the
   not-paired state too, since under cloud auth reads are gated and the poll is what discovers it.
+- Cloud auth: pairing by GitHub identity. `COLLIE_GITHUB_OWNER=<login>` opens `POST /api/pair/github`,
+  which enrols a device whose bearer is a GitHub access token of that login (verified against
+  `api.github.com/user`, never stored). The PWA consumes a `#gh=` fragment, tried before `#token=`.
 
 ## [1.8.2] - 2026-09-12
 
