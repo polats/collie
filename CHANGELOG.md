@@ -31,15 +31,15 @@ PATH. Details and rollback: [`docs/upgrading.md`](./docs/upgrading.md) → *Upgr
 ## [Unreleased]
 
 ### Added
-- Cloud auth: `COLLIE_AUTH_TOKEN` turns a bearer secret into the front door for a bridge on a
-  public PaaS URL with no proxy in front — every `/api` route, reads included, requires the token
+- **A bearer secret can be the front door on a public PaaS URL.** `COLLIE_AUTH_TOKEN` turns a
+  bearer secret into the front door for a bridge on a public PaaS URL with no proxy in front — every `/api` route, reads included, requires the token
   or a paired device's token; a credentialed write needs no `Origin`; `POST /api/pair/token` lets
   the token holder enrol a device without a code. Off when unset (docs/deployment.md → Variant F).
-- Cloud auth: a `#token=` fragment re-pairs a phone whose device token the bridge no longer knows
+- **A `#token=` link re-pairs a phone the bridge forgot.** A `#token=` fragment re-pairs a phone whose device token the bridge no longer knows
   (a Space that slept and woke without a volume): the bootstrap asks `GET /api/devices` first and
   re-enrols only on a definite refusal. A read refused with `device not paired` now raises the
   not-paired state too, since under cloud auth reads are gated and the poll is what discovers it.
-- Cloud auth: pairing by GitHub identity. `COLLIE_GITHUB_OWNER=<login>` opens `POST /api/pair/github`,
+- **A phone can pair by GitHub identity.** `COLLIE_GITHUB_OWNER=<login>` opens `POST /api/pair/github`,
   which enrols a device whose bearer is a GitHub access token of that login (verified against
   `api.github.com/user`, never stored). The PWA consumes a `#gh=` fragment, tried before `#token=`.
 
