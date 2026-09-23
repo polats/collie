@@ -334,6 +334,20 @@ export interface Config {
    */
   checkoutTokenFile: string;
   /**
+   * Agent accounts (`COLLIE_CONNECT_COMMAND`): an operator-provided command that signs this host in
+   * to an agent account once, so the phone can save that account for every future box —
+   * `POST /api/accounts/connect {agent}` opens a Space in {@link checkoutCwd} and types
+   * `<command> <agent>`. The command leaves the result as `<agent>.json` (`{secret, value}`) under
+   * {@link accountsDir}`/pending`, which the phone takes once and saves to the user's own GitHub
+   * account (a Codespaces secret scoped to {@link accountsRepo}); the GitHub token it saves with
+   * never reaches the bridge. Empty = the routes are off (404). (docs/deployment.md → Variant F.)
+   */
+  connectCommand: string;
+  /** Where the connect command leaves saved accounts; `pending/` beneath it is what the phone takes. */
+  accountsDir: string;
+  /** `owner/name` a saved account is scoped to — the repository new boxes are created from. */
+  accountsRepo: string;
+  /**
    * How much of each value's content the audit trail keeps — see {@link AuditContent} in audit.ts
    * for what `none` does and does not redact.
    */
@@ -677,6 +691,9 @@ export function loadConfig(env: Environment = process.env): Config {
     checkoutCommand: (env.COLLIE_CHECKOUT_COMMAND ?? "").trim(),
     checkoutCwd: (env.COLLIE_CHECKOUT_CWD ?? "").trim() || homedir(),
     checkoutTokenFile: (env.COLLIE_CHECKOUT_TOKEN_FILE ?? "").trim(),
+    connectCommand: (env.COLLIE_CONNECT_COMMAND ?? "").trim(),
+    accountsDir: (env.COLLIE_ACCOUNTS_DIR ?? "").trim(),
+    accountsRepo: (env.COLLIE_ACCOUNTS_REPO ?? "").trim(),
     auditContent: envEnum("COLLIE_AUDIT_CONTENT", ["preview", "none"] as const, "preview", env),
     deviceHeader: (env.COLLIE_DEVICE_HEADER ?? "").trim(),
     deviceAllowlist: envList("COLLIE_DEVICE_ALLOWLIST", env),

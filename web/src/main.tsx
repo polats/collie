@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { initDesign } from "./lib/design";
 import { initOperatorFonts } from "./lib/operator-config";
+import { bootstrapConnectFromFragment, connectIntentFromFragment, runAccountSaver } from "./lib/accounts-connect";
 import { bootstrapCheckoutFromFragment, bootstrapPairingFromFragment } from "./lib/pairing-bootstrap";
 import "./index.css";
 // Registers the service worker (precaches the app shell, enables install) and wires auto/manual
@@ -31,6 +32,9 @@ if (!root) throw new Error("missing #root");
 // a credential and the root secret is out of the address bar before anything could copy it
 // (lib/pairing-bootstrap.ts). Every other load has no fragment and this resolves immediately.
 void (async () => {
+  // Read before pairing, which strips `gh=`: the GitHub token a connected account is saved with
+  // stays in lib/accounts-connect.ts's memory only (see its header).
+  const connect = connectIntentFromFragment(location.hash);
   await bootstrapPairingFromFragment();
   // A box created "from a repository" arrives with #repo=: have the bridge clone it and open on
   // that pane, so the first thing the phone shows is the checkout running.
@@ -39,6 +43,11 @@ void (async () => {
     location.replace(`/pane/${encodeURIComponent(paneId)}`);
     return;
   }
+  // #connect=<agent>: open on that agent's sign-in. A history replace, not a reload, so the token
+  // held for the save survives; the router reads the path when it mounts below.
+  const signInPane = await bootstrapConnectFromFragment(connect);
+  if (signInPane !== null) history.replaceState(null, "", `/pane/${encodeURIComponent(signInPane)}`);
+  if (connect.agent !== null || connect.githubToken !== null) void runAccountSaver(connect);
   createRoot(root).render(
     <StrictMode>
       <App />

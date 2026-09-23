@@ -600,6 +600,13 @@ describe("solo zero-tax — routes", () => {
       "/^\\/api\\/tab\\/([^/]+)\\/(rename|close)$/",
       "/^\\/api\\/workspace\\/([^/]+)\\/worktree(?:\\/(open))?$/",
       "/^\\/api\\/workspace\\/([^/]+)\\/worktrees$/",
+      // Agent accounts (bridge/accounts.ts): connect is session-scoped like `/api/checkout`; the
+      // rest are process-scoped and 404 unless COLLIE_CONNECT_COMMAND and COLLIE_ACCOUNTS_DIR are set.
+      "/api/accounts/*",
+      "/api/accounts/connect",
+      "/api/accounts/done",
+      "/api/accounts/pending",
+      "/api/accounts/take",
       // The prompt-cache rule catalog (M28/02). A process-scoped READ, gated exactly as `/api/config`
       // is, and the only route this feature adds. Not forwarded across the crew link.
       "/api/cache-rules",
@@ -727,6 +734,9 @@ const CONFIG_KEYS = {
   checkoutCommand: true,
   checkoutCwd: true,
   checkoutTokenFile: true,
+  connectCommand: true,
+  accountsDir: true,
+  accountsRepo: true,
   deviceHeader: true,
   deviceAllowlist: true,
   allowedOrigins: true,
@@ -749,6 +759,8 @@ describe("solo zero-tax — config", () => {
   test("Config carries no crew/peer/lead key", () => {
     const keys = Object.keys(CONFIG_KEYS).toSorted();
     expect(keys).toEqual([
+      "accountsDir",
+      "accountsRepo",
       "allowAnyHost",
       "allowNonLoopbackBind",
       "allowedOrigins",
@@ -761,6 +773,7 @@ describe("solo zero-tax — config", () => {
       "checkoutCwd",
       "checkoutTokenFile",
       "commandsFile",
+      "connectCommand",
       "deviceAllowlist",
       "deviceHeader",
       "dialMode",
@@ -831,6 +844,8 @@ describe("solo zero-tax — config", () => {
       ),
     ].toSorted();
     expect(keys).toEqual([
+      "COLLIE_ACCOUNTS_DIR",
+      "COLLIE_ACCOUNTS_REPO",
       "COLLIE_ALLOWED_ORIGINS",
       "COLLIE_ALLOW_ANY_HOST",
       "COLLIE_ALLOW_NON_LOOPBACK_BIND",
@@ -842,6 +857,7 @@ describe("solo zero-tax — config", () => {
       "COLLIE_CHECKOUT_CWD",
       "COLLIE_CHECKOUT_TOKEN_FILE",
       "COLLIE_CODEX_ROOT",
+      "COLLIE_CONNECT_COMMAND",
       "COLLIE_DEVICE_ALLOWLIST",
       "COLLIE_DEVICE_HEADER",
       "COLLIE_GITHUB_OWNER",

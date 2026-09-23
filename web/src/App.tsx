@@ -1,6 +1,7 @@
 import { RouterProvider } from "react-router";
 
 import { router } from "./router";
+import { AccountSaveStatus } from "@/components/account-save-status";
 import { BusyBar } from "@/components/busy-bar";
 import { IdleLock } from "@/components/idle-lock";
 import { UpdateScreen } from "@/components/update-screen";
@@ -51,6 +52,7 @@ function AppShell() {
       <div style={{ display: "contents" }} inert={covered || screen.blocking}>
         <BusyBar />
         <RouterProvider router={router} />
+        <AccountSaveStatus />
       </div>
       {covered && <IdleLock onUnlock={unlock} catchingUp={catchingUp} />}
       <UpdateScreen screen={screen} />

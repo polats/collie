@@ -1319,6 +1319,13 @@ export const en = {
   "updateScreen.row.phoneKeptNote": "The new app loads the next time Collie starts.",
   "updateScreen.row.reading": "reading its state",
   "updateScreen.reading.subtitle": "Reading where the update is. This takes a second.",
+
+  // --- accounts (saving a connected agent account to GitHub) ---
+  "accounts.saving": "Saving your {agent} sign-in to your GitHub account…",
+  "accounts.saved": "{agent} is saved to your GitHub account. New boxes start signed in.",
+  "accounts.failed": "Could not save {agent} to GitHub ({reason}). Open this box from freeagent to try again.",
+  "accounts.noToken": "{agent} is signed in on this box. Open it from freeagent to save it for new boxes.",
+  "accounts.dismiss": "Dismiss",
 } as const;
 
 /** Every key that exists, as a union of string literals. The completeness contract. */

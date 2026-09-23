@@ -243,6 +243,33 @@ export const CONFIG_SETTINGS: readonly ConfigSetting[] = [
     doc: "Where a caller-supplied token for the clone is written, mode 600. Empty ignores the token.",
     configField: "checkoutTokenFile",
   },
+  {
+    key: "connect_command",
+    env: "COLLIE_CONNECT_COMMAND",
+    section: "bridge",
+    kind: "string",
+    default: "",
+    doc: "The command POST /api/accounts/connect types into a new Space, given one agent name, to sign in once and save the account. Empty turns the account routes off.",
+    configField: "connectCommand",
+  },
+  {
+    key: "accounts_dir",
+    env: "COLLIE_ACCOUNTS_DIR",
+    section: "bridge",
+    kind: "string",
+    default: "",
+    doc: "Where the connect command leaves saved accounts; the phone takes each one from pending/ once.",
+    configField: "accountsDir",
+  },
+  {
+    key: "accounts_repo",
+    env: "COLLIE_ACCOUNTS_REPO",
+    section: "bridge",
+    kind: "string",
+    default: "",
+    doc: "The owner/name a saved account is scoped to: the repository new boxes are created from.",
+    configField: "accountsRepo",
+  },
 
   // ── network ────────────────────────────────────────────────────────────────
   {

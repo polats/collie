@@ -42,6 +42,13 @@ PATH. Details and rollback: [`docs/upgrading.md`](./docs/upgrading.md) → *Upgr
 - **A phone can pair by GitHub identity.** `COLLIE_GITHUB_OWNER=<login>` opens `POST /api/pair/github`,
   which enrols a device whose bearer is a GitHub access token of that login (verified against
   `api.github.com/user`, never stored). The PWA consumes a `#gh=` fragment, tried before `#token=`.
+- **A cloud box can save an agent sign-in for every future box.** With `COLLIE_CONNECT_COMMAND` and
+  `COLLIE_ACCOUNTS_DIR` set, `POST /api/accounts/connect {agent}` runs that command's sign-in (Claude
+  or ChatGPT) in a new Space and the app opens on it; the result waits under `pending/` until the
+  page takes it (`/api/accounts/pending`, `/take`, `/done`, write-gated) and saves it to the user's
+  own GitHub account as a Codespaces secret scoped to `COLLIE_ACCOUNTS_REPO`, sealed in the browser
+  with a GitHub token held in memory only (`#connect=` with `#gh=`). The token never reaches the
+  bridge, and the app's CSP admits `https://api.github.com` only while the feature is on.
 
 ### Changed
 - **An update puts the phone in update mode until it is done.** Tap "Update all machines to X" on the Updates page, and the first screen of update mode names every machine and this phone, with Start update as the confirm; the card no longer grows a confirm inside itself. While the update runs, your app stays in view behind a veil and takes no tap. A band at the top says "Update mode · step N of 7" with a clock and a progress bar, and a panel at the bottom walks the seven steps: Check, Build, Restart, Verify, Other machines, This phone, Done. Each machine has a row with its versions, and only the row that is working moves. A member that stops answering, or waits out its hourly limit, gets "Skip <name>" and "Keep trying". The update ends on a Done, Rolled back or Stuck screen with "Back to the app", never on a toast alone. Another phone or tablet keeps its app and shows one line, "Update running, started on another device", with View. Nothing in the panel moves from one step to the next (ADR 0064).

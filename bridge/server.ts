@@ -8,6 +8,7 @@ import { type AuditDetail, type AuditEntry, AuditLog } from "./audit.ts";
 import { isLoopbackBindHost, type Config } from "./config.ts";
 import { apiError, type ApiErrorBody, type ApiErrorDetail, type ErrorCode } from "./error-codes.ts";
 import { verifyGithubOwner } from "./identity";
+import { clearPendingAccount, parseAccountAgent, pendingAgents, readPendingAccount } from "./accounts.ts";
 import { MUX_CAPABILITIES, type MuxCapability, type MuxCapabilityDeclaration } from "./mux/capabilities.ts";
 import type { MuxAdapter, MuxAck, MuxGrid } from "./mux/types.ts";
 import { allCacheRules } from "./cache/rules/index.ts";
@@ -156,6 +157,16 @@ const CSP =
   "default-src 'self'; connect-src 'self'; img-src 'self' data: blob:; " +
   "style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self'; " +
   "manifest-src 'self'; base-uri 'none'; frame-ancestors 'none'";
+
+/**
+ * The app shell's CSP for this configuration. One origin is added, and only while agent accounts
+ * are on (COLLIE_CONNECT_COMMAND, bridge/accounts.ts): `https://api.github.com`, where the page
+ * saves a connected account to the user's own GitHub account with a token it holds in memory. The
+ * bridge still makes no outbound call; this is the browser's, and every other install keeps `CSP`.
+ */
+export function cspFor(cfg: Pick<Config, "connectCommand">): string {
+  return cfg.connectCommand === "" ? CSP : CSP.replace("connect-src 'self';", "connect-src 'self' https://api.github.com;");
+}
 
 // Hardening headers set on EVERY response (static + API), applied centrally in the fetch wrapper.
 // nosniff stops content-type confusion; no-referrer keeps the tailnet URL out of any Referer.
@@ -1009,6 +1020,17 @@ export function startServer(opts: {
       if (rt instanceof Response) return rt;
       return checkout(rt.herdr, rt.engine, req, caller.audit, caller.device(), rt.name, cfg);
     }
+    // An account connect is a checkout whose one argument is an agent name from a fixed list: the
+    // operator's COLLIE_CONNECT_COMMAND runs that agent's own sign-in in a fresh Space
+    // (Config.connectCommand, bridge/accounts.ts).
+    if (pathname === "/api/accounts/connect" && req.method === "POST") {
+      if (cfg.connectCommand === "") return text("not found", 404);
+      const denied = caller.gate("write");
+      if (denied) return denied;
+      const rt = await caller.resolve();
+      if (rt instanceof Response) return rt;
+      return connectAccount(rt.herdr, rt.engine, req, caller.audit, caller.device(), rt.name, cfg);
+    }
     // Rows must come from the host that runs them: today's `/api/config` (a lead-only body) sent
     // the LEAD's rows down even for a launch addressed at a peer via `?host=`. Session-scoped like
     // `/api/launch` beside it, so the same `?host=` forward (§5) reaches the peer's own
@@ -1510,6 +1532,47 @@ export function startServer(opts: {
           req.headers.get("accept-encoding"),
           req.headers.get("if-none-match"),
         );
+      }
+      // Saved agent accounts waiting for the phone (bridge/accounts.ts). The list is read-level — it
+      // names agents, never a credential. Taking a payload is write-level, like typing into a pane,
+      // because it hands over a sign-in; it is deleted only when the phone reports the save (`done`),
+      // so a failed save can be retried. All three answer 404 when the feature is off.
+      if (pathname.startsWith("/api/accounts/") && pathname !== "/api/accounts/connect") {
+        if (cfg.connectCommand === "" || cfg.accountsDir === "") return text("not found", 404);
+        const ae = req.headers.get("accept-encoding");
+        if (pathname === "/api/accounts/pending" && req.method === "GET") {
+          const denied = guard(req, cfg, "read", pairing);
+          if (denied) return denied;
+          return json({ repo: cfg.accountsRepo, pending: await pendingAgents(cfg.accountsDir) }, ae);
+        }
+        if ((pathname === "/api/accounts/take" || pathname === "/api/accounts/done") && req.method === "POST") {
+          const denied = guard(req, cfg, "write", pairing);
+          if (denied) return denied;
+          let body: JsonValue;
+          try {
+            // SAFETY: `Request.json()` output IS a JsonValue by construction; `parseAccountAgent`
+            // accepts only a name from ACCOUNT_AGENTS.
+            body = (await req.json()) as JsonValue;
+          } catch {
+            return text("bad body", 400);
+          }
+          const agent = parseAccountAgent(body);
+          if (agent === null) return text("bad body", 400);
+          const device = whois(req).device;
+          if (pathname === "/api/accounts/done") {
+            const cleared = await clearPendingAccount(cfg.accountsDir, agent);
+            audit.record({ action: "accounts.saved", device, detail: { agent, cleared } });
+            return json({ ok: true, cleared }, ae);
+          }
+          const payload = await readPendingAccount(cfg.accountsDir, agent);
+          if (payload === null) return text("nothing pending", 404);
+          // The value is a credential: never in the audit trail, never cached anywhere on the way.
+          audit.record({ action: "accounts.take", device, detail: { agent, secret: payload.secret } });
+          const res = json(payload, null);
+          res.headers.set("cache-control", "no-store");
+          return res;
+        }
+        return text("not found", 404);
       }
       if (pathname === "/api/config") {
         // Read-level, like the other non-terminal endpoints. Nothing Collie puts here is a
@@ -2191,7 +2254,7 @@ export function startServer(opts: {
       if (isReservedAuthPath(pathname)) return reservedAuthPlaceholder();
 
       // ── Static PWA (with SPA fallback) ───────────────────────────────────
-      return serveStatic(pathname, req.headers.get("accept-encoding"), WEB_DIR, cfg.basePath);
+      return serveStatic(pathname, req.headers.get("accept-encoding"), WEB_DIR, cfg.basePath, cspFor(cfg));
     },
   });
 
@@ -3599,6 +3662,69 @@ export async function checkout(
   );
 }
 
+/**
+ * Open a Space and run the operator's connect command for one agent from {@link ACCOUNT_AGENTS}: the
+ * agent's own sign-in, in a pane the phone opens on. Mirrors {@link checkout}.
+ */
+export async function connectAccount(
+  herdr: MuxAdapter,
+  engine: StateEngine,
+  req: Request,
+  audit: AuditLog,
+  device: string | null,
+  session: string,
+  cfg: Pick<Config, "connectCommand" | "checkoutCwd">,
+  wait: PaneReadyOptions = {},
+): Promise<Response> {
+  const ae = req.headers.get("accept-encoding");
+  let body: JsonValue;
+  try {
+    // SAFETY: `Request.json()` output IS a JsonValue by construction; `parseAccountAgent` accepts
+    // only a name from ACCOUNT_AGENTS before any of it reaches the shell line.
+    body = (await req.json()) as JsonValue;
+  } catch {
+    return text("bad body", 400);
+  }
+  const agent = parseAccountAgent(body);
+  if (agent === null) return text("bad body", 400);
+  const outcome = await herdr.createSpace({ cwd: cfg.checkoutCwd, label: `sign in: ${agent}` });
+  if (!outcome.ok) {
+    return json(
+      { ok: false, ...apiError("workspace.create_failed", { reason: outcome.detail }) } satisfies CreateResponse,
+      ae,
+    );
+  }
+  const created = outcome.value;
+  const ready = await awaitPaneReady(herdr, created.paneId, wait);
+  if (!ready.ready) {
+    console.warn(`[accounts] pane ${created.paneId} did not settle after ${ready.ms}ms — sending anyway`);
+  }
+  const sent = await sendReplySteps(herdr, created.paneId, `${cfg.connectCommand} ${agent}`, true, ["Enter"], wait.sleep);
+  if (!sent.ok) {
+    try {
+      await herdr.closePane(created.paneId);
+    } catch {
+      // Best effort: the failure being reported is the send, not the close.
+    }
+    return json({ ok: false, error: sent.error, code: sent.code, detail: sent.detail } satisfies CreateResponse, ae);
+  }
+  audit.record({ action: "accounts.connect", paneId: created.paneId, session, device, detail: { agent } });
+  await settleTopology(herdr, engine);
+  return json(
+    {
+      ok: true,
+      pane: {
+        paneId: created.paneId,
+        workspaceId: created.spaceId,
+        workspaceLabel: created.spaceLabel,
+        tabId: created.tabId,
+        cwd: created.cwd,
+      },
+    } satisfies CreateResponse,
+    ae,
+  );
+}
+
 export async function launch(
   herdr: MuxAdapter,
   engine: StateEngine,
@@ -4414,6 +4540,7 @@ export async function serveStatic(
   acceptEncoding: string | null,
   webDir: string = WEB_DIR,
   basePath: string = "/",
+  csp: string = CSP,
 ): Promise<Response> {
   const resolved = resolveStaticPath(pathname, webDir);
   if (!resolved) return text("forbidden", 403);
@@ -4440,7 +4567,7 @@ export async function serveStatic(
     [BUILD_HEADER]: await buildId(), // which bundle the server is serving (vs the client's stamp)
     "cache-control": cacheControlFor(rel),
   };
-  if (ext === ".html") headers["content-security-policy"] = CSP;
+  if (ext === ".html") headers["content-security-policy"] = csp;
   if (rel === "sw.js") headers["service-worker-allowed"] = "/";
 
   // Under a mount the app shell is the one file not served as it lies on disk: its root-absolute
